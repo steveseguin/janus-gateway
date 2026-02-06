@@ -1,0 +1,74 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "html/**"
+      - "tests/e2e/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "html/**"
+      - "tests/e2e/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_LOG: info
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build janus-rs server
+        run: cargo build --release -p janus-server
+
+      - name: Start Janus server
+        run: |
+          JANUS_STATIC_DIR=html ./target/release/janus-rs &
+          sleep 2
+          # Verify server is up
+          curl -sf http://localhost:8088/janus/info || exit 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright
+        working-directory: tests/e2e
+        run: |
+          npm install
+          npx playwright install chromium --with-deps
+
+      - name: Run E2E tests
+        working-directory: tests/e2e
+        run: npx playwright test
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: tests/e2e/test-results/

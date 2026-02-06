@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Janus (Rust) — Streaming Viewer</title>
+    <style>
+        body { font-family: sans-serif; background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }
+        h1 { color: #e94560; margin-bottom: 5px; }
+        .subtitle { color: #888; margin-bottom: 20px; }
+        a { color: #4ecca3; }
+        video { border-radius: 4px; background: #000; width: 640px; height: 480px; display: block; }
+        #status { margin-top: 16px; padding: 8px 12px; background: #16213e; border-radius: 4px; font-size: 13px; }
+        .ok { color: #4ecca3; }
+        .err { color: #e94560; }
+    </style>
+</head>
+<body>
+    <h1>Streaming Viewer</h1>
+    <p class="subtitle">Rust Janus Server &bull; Watching mountpoint 1 &bull; <a href="index.html">All demos</a></p>
+
+    <video id="stream-video" autoplay playsinline></video>
+    <div id="status">Connecting...</div>
+
+    <script src="/demos/janus.js"></script>
+    <script src="settings.js"></script>
+    <script src="streaming-viewer.js"></script>
+</body>
+</html>

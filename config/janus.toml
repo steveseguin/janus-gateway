@@ -1,0 +1,34 @@
+# Janus Gateway (Rust) configuration
+# This file is loaded from /etc/janus/janus.toml or via JANUS_CONFIG env var.
+
+[general]
+server_name = "Janus Gateway (Rust)"
+session_timeout = 60
+
+[http]
+address = "0.0.0.0"
+port = 8088
+admin_port = 7088
+base_path = "/janus"
+admin_base_path = "/admin"
+
+[websocket]
+address = "0.0.0.0"
+port = 8188
+
+# Pre-configured VideoRoom (room 1234)
+[videoroom]
+room_id = 1234
+description = "Default VideoRoom"
+max_publishers = 6
+bitrate = 256000
+
+# Pre-configured Streaming mountpoint (id=1)
+[streaming]
+mountpoint_id = 1
+name = "Test Stream"
+description = "Default test stream"
+audio_port = 5004
+video_port = 5006
+audio_codec = "opus"
+video_codec = "vp8"

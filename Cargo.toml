@@ -1,0 +1,77 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/janus-core",
+    "crates/janus-plugin-api",
+    "crates/janus-transport-api",
+    "crates/janus-event-api",
+    "crates/plugins/janus-plugin-echotest",
+    "crates/plugins/janus-plugin-videoroom",
+    "crates/plugins/janus-plugin-streaming",
+    "crates/plugins/janus-plugin-audiobridge",
+    "crates/plugins/janus-plugin-sip",
+    "crates/plugins/janus-plugin-nosip",
+    "crates/plugins/janus-plugin-videocall",
+    "crates/plugins/janus-plugin-recordplay",
+    "crates/plugins/janus-plugin-textroom",
+    "crates/transports/janus-transport-websocket",
+    "crates/transports/janus-transport-http",
+    "crates/janus-whip-whep",
+    "crates/janus-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+repository = "https://github.com/steveseguin/janus-gateway"
+
+[workspace.dependencies]
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# WebRTC
+str0m = "0.11"
+
+# Web / API
+axum = { version = "0.7", features = ["ws"] }
+tokio-tungstenite = "0.24"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs"] }
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Data structures
+dashmap = "6"
+uuid = { version = "1", features = ["v4"] }
+
+# Plugin loading
+libloading = "0.8"
+
+# Crypto
+rustls = "0.23"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Testing
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+
+# Internal crates
+janus-plugin-api = { path = "crates/janus-plugin-api" }
+janus-transport-api = { path = "crates/janus-transport-api" }
+janus-event-api = { path = "crates/janus-event-api" }
+janus-core = { path = "crates/janus-core" }
+janus-whip-whep = { path = "crates/janus-whip-whep" }

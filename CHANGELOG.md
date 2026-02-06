@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Rust Rewrite] - 2026-02-06
+
+### Rust Implementation Milestone
+- Complete Rust workspace with 15 crates (220 tests passing)
+- Core server: session management, plugin dispatch, WebRTC via str0m
+- Plugins: EchoTest (full), VideoRoom (full SFU), Streaming (full), plus 6 stubs
+- Transports: HTTP/REST (axum) with static file serving, WebSocket (tokio-tungstenite)
+- Docker deployment: multi-stage Dockerfile + docker-compose.yml
+- Demo site: bouncing ball + sinewave VideoRoom demo, streaming viewer
+- E2E tests: Playwright test suite with GitHub Actions CI
+- Repository reorganized: C source moved to c-legacy/, Rust workspace at root
+
+
 ## [v1.3.3] - 2025-10-21
 
 - Refactored keyframe buffering in Streaming plugin to store following deltas too (thanks [Byborg](https://www.byborgenterprises.com/)!) [[PR-3564](https://github.com/meetecho/janus-gateway/pull/3564)]

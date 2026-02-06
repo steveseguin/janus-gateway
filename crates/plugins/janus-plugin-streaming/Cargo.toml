@@ -1,0 +1,18 @@
+[package]
+name = "janus-plugin-streaming"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Janus Streaming plugin — serve RTP sources to WebRTC viewers"
+
+[dependencies]
+janus-plugin-api.workspace = true
+async-trait.workspace = true
+dashmap.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["net", "sync", "time", "macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
