@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Janus (Rust) — Demo Index</title>
+    <style>
+        body { font-family: sans-serif; background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }
+        h1 { color: #e94560; margin-bottom: 5px; }
+        .subtitle { color: #888; margin-bottom: 30px; }
+        a { color: #4ecca3; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .demos { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; max-width: 960px; }
+        .card {
+            background: #16213e; border-radius: 8px; padding: 20px;
+            border: 1px solid #0f3460; transition: border-color 0.2s;
+        }
+        .card:hover { border-color: #4ecca3; }
+        .card h2 { margin: 0 0 8px; font-size: 18px; }
+        .card h2 a { color: #4ecca3; }
+        .card p { margin: 0; font-size: 13px; color: #999; line-height: 1.5; }
+        .card .tag {
+            display: inline-block; font-size: 11px; padding: 2px 8px;
+            border-radius: 3px; margin-top: 10px; font-weight: bold;
+        }
+        .tag.janus-api { background: #0f3460; color: #4ecca3; }
+        .tag.whip-whep { background: #2d1b4e; color: #b388ff; }
+        .note { font-size: 12px; color: #666; margin-top: 24px; line-height: 1.5; max-width: 640px; }
+    </style>
+</head>
+<body>
+    <h1>Janus Gateway (Rust) Demos</h1>
+    <p class="subtitle">Interactive demos for the Rust rewrite of Janus WebRTC Server</p>
+
+    <div class="demos">
+        <div class="card">
+            <h2><a href="bouncingball.html">VideoRoom — Bouncing Ball</a></h2>
+            <p>
+                Publishes a canvas-captured bouncing ball + sine tone to
+                VideoRoom (room 1234) via the Janus API. Uses janus.js for
+                signaling over WebSocket.
+            </p>
+            <span class="tag janus-api">Janus API</span>
+        </div>
+
+        <div class="card">
+            <h2><a href="streaming-viewer.html">Streaming Viewer</a></h2>
+            <p>
+                Watches a Streaming plugin mountpoint (ID 1) via the Janus API.
+                Uses janus.js for signaling over WebSocket.
+            </p>
+            <span class="tag janus-api">Janus API</span>
+        </div>
+
+        <div class="card">
+            <h2><a href="whip-whep.html">WHIP/WHEP Demo</a></h2>
+            <p>
+                Publishes via WHIP (RFC 9725) and subscribes via WHEP using
+                plain HTTP + RTCPeerConnection. No janus.js needed — pure
+                standard WebRTC signaling.
+            </p>
+            <span class="tag whip-whep">WHIP/WHEP</span>
+        </div>
+
+        <div class="card">
+            <h2><a href="whep-player.html">WHEP Player</a></h2>
+            <p>
+                Standalone WHEP viewer — paste a Publisher ID to subscribe to
+                any active WHIP stream. Open in multiple tabs to test fan-out.
+            </p>
+            <span class="tag whip-whep">WHEP</span>
+        </div>
+    </div>
+
+    <p class="note">
+        <strong>Janus API</strong> demos use janus.js and require a WebSocket connection
+        to the Janus server (port 8188 by default).<br>
+        <strong>WHIP/WHEP</strong> demos use standard HTTP signaling and only need the
+        HTTP transport (port 8088 by default).
+    </p>
+</body>
+</html>

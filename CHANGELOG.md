@@ -3,6 +3,36 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Rust Rewrite] - 2026-02-06
+
+### WHIP-Out Relay
+- Added outgoing WHIP relay: forward incoming WHIP streams to remote WHIP endpoints
+- `POST /whip-out/:publisher_id` to add relay targets with optional Bearer auth
+- `GET /whip-out/:publisher_id` to list active relays for a publisher
+- Cascade cleanup: deleting a WHIP publisher also tears down all outgoing relays
+- Fixed `SendRtp` stub in PeerConnectionActor — now writes actual RTP via str0m
+- Added offerer flow (`CreateOffer` + `SetRemoteAnswer`) to PeerConnection actor
+- Added `reqwest` workspace dependency for outgoing HTTP signaling
+
+### WHIP/WHEP Plugin (RFC 9725)
+- WHIP ingest: publish media via `POST /whip` with SDP offer
+- WHEP egress: subscribe to streams via `POST /whep/:publisher_id`
+- Resource management: trickle ICE (PATCH), ICE restart, DELETE teardown
+- Link headers with STUN/TURN ICE server info derived from NatConfig
+- Fan-out manager for publisher → subscriber RTP relay
+- Demo pages: WHIP/WHEP publisher+subscriber, standalone WHEP player
+
+### Rust Implementation Milestone
+- Complete Rust workspace with 17 crates (286+ tests passing, 18 Playwright E2E tests)
+- Core server: session management, plugin dispatch, WebRTC via str0m, TOML config
+- Plugins: EchoTest (full), VideoRoom (full SFU), Streaming (full), plus 6 stubs
+- Transports: HTTP/REST (axum) with static file serving, WebSocket (tokio-tungstenite)
+- Docker deployment: multi-stage Dockerfile + docker-compose.yml
+- Demo site: bouncing ball VideoRoom, streaming viewer, WHIP/WHEP, WHEP player
+- E2E tests: Playwright test suite with GitHub Actions CI
+- Repository reorganized: C source moved to c-legacy/, Rust workspace at root
+
+
 ## [v1.3.3] - 2025-10-21
 
 - Refactored keyframe buffering in Streaming plugin to store following deltas too (thanks [Byborg](https://www.byborgenterprises.com/)!) [[PR-3564](https://github.com/meetecho/janus-gateway/pull/3564)]

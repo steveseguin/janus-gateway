@@ -183,34 +183,30 @@ jobs:
           JANUS_CONFIG_COMMON: "--disable-docs --enable-post-processing --enable-plugin-lua --enable-plugin-duktape --enable-json-logger"
           JANUS_CONFIG_OPTS: ${{ matrix.janus_config_opts }}
         run: |
+          cd c-legacy
+          ln -sf ../html html
+          ln -sf ../npm npm
+          ln -sf ../README.md README.md
           ./autogen.sh
           ./configure $JANUS_CONFIG_COMMON $JANUS_CONFIG_OPTS CFLAGS="-O0"
           make -j$(nproc)
-          make check-fuzzers
+          SRC="$(dirname "$(pwd)")" JANUSGW="$(basename "$(pwd)")" make check-fuzzers
   javascript-lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install modules
-        run: |
-          cd npm
-          npm install
+        run: npm install
       - name: Run ESLint
-        run: |
-          cd npm
-          npm run lint
+        run: npm run lint
   javascript-dist:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install modules
-        run: |
-          cd npm
-          npm install
+        run: npm install
       - name: Make dist files
-        run: |
-          cd npm
-          npm run prerelease
+        run: npm run prerelease
       - uses: actions/upload-artifact@v4
         with:
           name: janus.es.js

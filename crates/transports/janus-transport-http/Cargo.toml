@@ -1,0 +1,24 @@
+[package]
+name = "janus-transport-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HTTP/REST transport for Janus Gateway"
+
+[dependencies]
+janus-plugin-api.workspace = true
+janus-transport-api.workspace = true
+janus-core.workspace = true
+
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+dashmap.workspace = true
+janus-whip-whep.workspace = true
+flate2 = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tower.workspace = true

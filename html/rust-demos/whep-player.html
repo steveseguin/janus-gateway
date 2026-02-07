@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Janus (Rust) — WHEP Player</title>
+    <style>
+        body { font-family: sans-serif; background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }
+        h1 { color: #e94560; margin-bottom: 5px; }
+        .subtitle { color: #888; margin-bottom: 20px; }
+        a { color: #4ecca3; }
+        video { border-radius: 4px; background: #000; width: 640px; height: 480px; display: block; }
+        #controls { margin-bottom: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        input[type="text"] {
+            padding: 8px 12px; border: 1px solid #0f3460; border-radius: 4px;
+            background: #16213e; color: #eee; font-size: 14px; width: 320px;
+            font-family: monospace;
+        }
+        input[type="text"]::placeholder { color: #555; }
+        button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        button.subscribe { background: #0f3460; color: #eee; }
+        button.stop { background: #e94560; color: #fff; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        #status { margin-top: 16px; padding: 8px 12px; background: #16213e; border-radius: 4px; font-size: 13px; max-height: 200px; overflow-y: auto; }
+        .ok { color: #4ecca3; }
+        .err { color: #e94560; }
+        .info { color: #888; }
+        .note { font-size: 12px; color: #666; margin-top: 12px; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <h1>WHEP Player</h1>
+    <p class="subtitle">Rust Janus Server &bull; Subscribe to any WHIP publisher via WHEP &bull; <a href="index.html">All demos</a></p>
+
+    <div id="controls">
+        <input type="text" id="publisher-id" placeholder="Paste Publisher ID here...">
+        <button class="subscribe" id="btn-watch" onclick="watch()">Watch (WHEP)</button>
+        <button class="stop" id="btn-stop" onclick="stop()" disabled>Stop</button>
+    </div>
+
+    <video id="remote-video" autoplay playsinline muted></video>
+    <div id="status"></div>
+
+    <p class="note">
+        Paste a Publisher ID from the <a href="whip-whep.html">WHIP/WHEP demo</a> to
+        subscribe to that stream from this separate page. This demonstrates that WHEP
+        subscribers are independent clients — you can open multiple tabs to watch the
+        same publisher simultaneously.<br>
+        Protocol: HTTP POST of SDP offer to <code>/whep/{publisher_id}</code> &rarr;
+        201 + SDP answer. No janus.js required.
+    </p>
+
+    <script src="whep-player.js"></script>
+</body>
+</html>

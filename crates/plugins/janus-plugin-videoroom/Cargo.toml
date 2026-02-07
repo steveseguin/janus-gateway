@@ -1,0 +1,19 @@
+[package]
+name = "janus-plugin-videoroom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "VideoRoom SFU plugin for Janus Gateway"
+
+[dependencies]
+janus-plugin-api.workspace = true
+
+async-trait.workspace = true
+dashmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
