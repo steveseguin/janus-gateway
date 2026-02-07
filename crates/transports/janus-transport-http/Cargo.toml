@@ -17,6 +17,7 @@ serde_json.workspace = true
 tracing.workspace = true
 dashmap.workspace = true
 janus-whip-whep.workspace = true
+flate2 = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

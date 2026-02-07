@@ -116,6 +116,7 @@ impl janus_core::webrtc::WebRtcCallbacks for WhepWebRtcCallbacks {
 
 pub(crate) async fn create_pc(
     ice_lite: bool,
+    nat_1_1_mapping: Option<String>,
     callbacks: Arc<dyn janus_core::webrtc::WebRtcCallbacks>,
 ) -> Result<PeerConnectionHandle, String> {
     // WHIP/WHEP PeerConnections don't use Janus sessions, so we use
@@ -126,6 +127,9 @@ pub(crate) async fn create_pc(
         ice_lite,
         session,
         callbacks,
+        rtp_port_min: 0,
+        rtp_port_max: 0,
+        nat_1_1_mapping,
     };
     webrtc::create_peer_connection(config).await
 }
@@ -162,7 +166,8 @@ pub async fn whip_offer(
         state: state.clone(),
     });
 
-    let pc_handle = match create_pc(state.ice_lite, callbacks).await {
+    let pc_handle = match create_pc(state.ice_lite, state.nat_1_1_mapping.clone(), callbacks).await
+    {
         Ok(h) => h,
         Err(e) => {
             return error_response(
@@ -268,7 +273,8 @@ pub async fn whep_offer(
         subscriber_id: resource_id,
     });
 
-    let pc_handle = match create_pc(state.ice_lite, callbacks).await {
+    let pc_handle = match create_pc(state.ice_lite, state.nat_1_1_mapping.clone(), callbacks).await
+    {
         Ok(h) => h,
         Err(e) => {
             return error_response(
@@ -875,7 +881,7 @@ mod tests {
         let id = ResourceId::new();
         let callbacks: Arc<dyn janus_core::webrtc::WebRtcCallbacks> =
             Arc::new(WhepWebRtcCallbacks { subscriber_id: id });
-        let pc = create_pc(true, callbacks).await.unwrap();
+        let pc = create_pc(true, None, callbacks).await.unwrap();
         state.resources.insert(
             id,
             Resource {
@@ -908,7 +914,7 @@ mod tests {
         let id = ResourceId::new();
         let callbacks: Arc<dyn janus_core::webrtc::WebRtcCallbacks> =
             Arc::new(WhepWebRtcCallbacks { subscriber_id: id });
-        let pc = create_pc(true, callbacks).await.unwrap();
+        let pc = create_pc(true, None, callbacks).await.unwrap();
         state.resources.insert(
             id,
             Resource {
@@ -944,7 +950,7 @@ mod tests {
         let id = ResourceId::new();
         let callbacks: Arc<dyn janus_core::webrtc::WebRtcCallbacks> =
             Arc::new(WhepWebRtcCallbacks { subscriber_id: id });
-        let pc = create_pc(true, callbacks).await.unwrap();
+        let pc = create_pc(true, None, callbacks).await.unwrap();
         let etag = "my-etag".to_string();
         state.resources.insert(
             id,
@@ -981,7 +987,7 @@ mod tests {
         let id = ResourceId::new();
         let callbacks: Arc<dyn janus_core::webrtc::WebRtcCallbacks> =
             Arc::new(WhepWebRtcCallbacks { subscriber_id: id });
-        let pc = create_pc(true, callbacks).await.unwrap();
+        let pc = create_pc(true, None, callbacks).await.unwrap();
         state.resources.insert(
             id,
             Resource {
@@ -1017,7 +1023,7 @@ mod tests {
                 publisher_id: id,
                 state: state.clone(),
             });
-        let pc = create_pc(true, callbacks).await.unwrap();
+        let pc = create_pc(true, None, callbacks).await.unwrap();
         state.fanout.register_publisher(id);
         state.resources.insert(
             id,

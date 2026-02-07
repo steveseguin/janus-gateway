@@ -7,6 +7,7 @@ use janus_core::server::JanusServer;
 use janus_plugin_api::JanusPlugin;
 use janus_plugin_echotest::EchoTestPlugin;
 use janus_plugin_streaming::StreamingPlugin;
+use janus_plugin_videocall::VideoCallPlugin;
 use janus_plugin_videoroom::VideoRoomPlugin;
 use janus_transport_http::{start_http_transport, HttpTransportConfig};
 use janus_transport_websocket::{WsTransport, WsTransportConfig};
@@ -64,6 +65,14 @@ async fn main() {
         server.register_plugin(Arc::new(streaming));
     }
 
+    let mut videocall = VideoCallPlugin::default();
+    let plugin_callbacks = server.plugin_callbacks();
+    if let Err(e) = videocall.init(plugin_callbacks, &plugin_config_dir).await {
+        error!(error = %e, "failed to init VideoCall plugin");
+    } else {
+        server.register_plugin(Arc::new(videocall));
+    }
+
     // Start HTTP transport with static file serving
     let mut http_config = HttpTransportConfig::default();
     // Serve static files from JANUS_STATIC_DIR env or default "html" directory
@@ -72,6 +81,12 @@ async fn main() {
         info!(directory = %static_dir, "enabling static file serving");
         http_config.static_dir = Some(static_dir);
     }
+    // Enable admin port (default: 7088)
+    let admin_port: u16 = std::env::var("JANUS_ADMIN_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(7088);
+    http_config.admin_port = admin_port;
     if let Err(e) =
         start_http_transport(&http_config, Arc::clone(&server), &server.config().nat).await
     {
@@ -87,6 +102,7 @@ async fn main() {
 
     info!("Janus Gateway (Rust) ready");
     info!("  HTTP API:      http://0.0.0.0:8088/janus");
+    info!("  Admin API:     http://0.0.0.0:{}/admin", admin_port);
     info!("  WebSocket API: ws://0.0.0.0:8188");
     info!("Press Ctrl+C to stop");
 

@@ -105,6 +105,8 @@ pub struct MediaConfig {
     pub rtp_port_range_max: u16,
     /// Enable/disable TWCC.
     pub twcc: bool,
+    /// Relay command buffer size (number of commands).
+    pub relay_buffer_size: usize,
 }
 
 impl Default for MediaConfig {
@@ -114,6 +116,7 @@ impl Default for MediaConfig {
             rtp_port_range_min: 20000,
             rtp_port_range_max: 40000,
             twcc: true,
+            relay_buffer_size: 65536,
         }
     }
 }

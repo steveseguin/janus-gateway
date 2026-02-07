@@ -5,6 +5,7 @@
 
 use dashmap::DashMap;
 use janus_plugin_api::{HandleId, PluginSession, SessionId};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Notify;
@@ -14,7 +15,7 @@ use tracing::{debug, warn};
 pub struct SessionManager {
     sessions: DashMap<SessionId, Session>,
     /// Timeout in seconds. 0 = no timeout.
-    session_timeout: u64,
+    session_timeout: AtomicU64,
     /// Notified when a new session is created (for watchdog wakeup).
     notify: Arc<Notify>,
 }
@@ -52,9 +53,20 @@ impl SessionManager {
     pub fn new(session_timeout: u64) -> Self {
         Self {
             sessions: DashMap::new(),
-            session_timeout,
+            session_timeout: AtomicU64::new(session_timeout),
             notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Get the current session timeout in seconds.
+    pub fn session_timeout(&self) -> u64 {
+        self.session_timeout.load(Ordering::Relaxed)
+    }
+
+    /// Set the session timeout in seconds.
+    pub fn set_session_timeout(&self, timeout: u64) {
+        self.session_timeout.store(timeout, Ordering::Relaxed);
+        debug!(timeout = timeout, "session timeout updated");
     }
 
     /// Create a new session with a random ID and return it.
@@ -186,10 +198,11 @@ impl SessionManager {
 
     /// Collect sessions that have timed out. Returns their IDs.
     pub fn collect_timed_out(&self) -> Vec<SessionId> {
-        if self.session_timeout == 0 {
+        let timeout_secs = self.session_timeout.load(Ordering::Relaxed);
+        if timeout_secs == 0 {
             return Vec::new();
         }
-        let timeout = std::time::Duration::from_secs(self.session_timeout);
+        let timeout = std::time::Duration::from_secs(timeout_secs);
         let now = Instant::now();
         self.sessions
             .iter()
@@ -205,11 +218,8 @@ impl SessionManager {
         tokio::spawn(async move {
             loop {
                 // Sleep for half the timeout period (or 5s if no timeout).
-                let sleep_secs = if mgr.session_timeout > 0 {
-                    mgr.session_timeout / 2
-                } else {
-                    5
-                };
+                let timeout = mgr.session_timeout.load(Ordering::Relaxed);
+                let sleep_secs = if timeout > 0 { timeout / 2 } else { 5 };
                 tokio::time::sleep(std::time::Duration::from_secs(sleep_secs.max(1))).await;
 
                 let timed_out = mgr.collect_timed_out();
@@ -383,5 +393,15 @@ mod tests {
         }
 
         assert_eq!(mgr.session_count(), 1000);
+    }
+
+    #[test]
+    fn session_timeout_get_and_set() {
+        let mgr = SessionManager::new(60);
+        assert_eq!(mgr.session_timeout(), 60);
+        mgr.set_session_timeout(120);
+        assert_eq!(mgr.session_timeout(), 120);
+        mgr.set_session_timeout(0);
+        assert_eq!(mgr.session_timeout(), 0);
     }
 }

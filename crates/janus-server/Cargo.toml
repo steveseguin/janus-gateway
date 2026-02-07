@@ -17,6 +17,7 @@ janus-event-api.workspace = true
 janus-plugin-echotest = { path = "../plugins/janus-plugin-echotest" }
 janus-plugin-videoroom = { path = "../plugins/janus-plugin-videoroom" }
 janus-plugin-streaming = { path = "../plugins/janus-plugin-streaming" }
+janus-plugin-videocall = { path = "../plugins/janus-plugin-videocall" }
 janus-transport-http = { path = "../transports/janus-transport-http" }
 janus-transport-websocket = { path = "../transports/janus-transport-websocket" }
 janus-whip-whep.workspace = true

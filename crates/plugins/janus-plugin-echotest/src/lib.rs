@@ -604,4 +604,246 @@ mod tests {
             let _ = janus_plugin_api::from_ffi_plugin(raw);
         }
     }
+
+    #[tokio::test]
+    async fn toggle_audio_video_mid_session() {
+        let mut plugin = EchoTestPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session();
+        plugin.create_session(&session).await.unwrap();
+        plugin.setup_media(&session);
+
+        // Initially both audio and video are enabled
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["audio"], true);
+        assert_eq!(info["video"], true);
+
+        // Disable audio
+        plugin
+            .handle_message(
+                &session,
+                "txn_a1",
+                json!({"audio": false, "video": true}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["audio"], false);
+        assert_eq!(info["video"], true);
+
+        // Disable video too
+        plugin
+            .handle_message(
+                &session,
+                "txn_a2",
+                json!({"audio": false, "video": false}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["audio"], false);
+        assert_eq!(info["video"], false);
+
+        // Re-enable audio
+        plugin
+            .handle_message(
+                &session,
+                "txn_a3",
+                json!({"audio": true, "video": false}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["audio"], true);
+        assert_eq!(info["video"], false);
+
+        // Re-enable video
+        plugin
+            .handle_message(
+                &session,
+                "txn_a4",
+                json!({"audio": true, "video": true}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["audio"], true);
+        assert_eq!(info["video"], true);
+    }
+
+    #[tokio::test]
+    async fn destroy_session_cleans_up_echo_state() {
+        let mut plugin = EchoTestPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        let cb_clone = Arc::clone(&cb);
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session();
+        plugin.create_session(&session).await.unwrap();
+        plugin.setup_media(&session);
+        assert_eq!(plugin.sessions.len(), 1);
+
+        // Destroy the session
+        plugin.destroy_session(&session).await.unwrap();
+        assert_eq!(plugin.sessions.len(), 0);
+
+        // query_session should return an error
+        assert!(plugin.query_session(&session).is_err());
+
+        // incoming_rtp on a destroyed session should not panic and should not relay
+        plugin.incoming_rtp(&session, &make_rtp(false));
+        assert_eq!(cb_clone.rtp_relayed.load(Ordering::Relaxed), 0);
+
+        // incoming_rtcp on a destroyed session should not panic and should not relay
+        plugin.incoming_rtcp(&session, &make_rtcp());
+        assert_eq!(cb_clone.rtcp_relayed.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_sessions_dont_cross_contaminate() {
+        let mut plugin = EchoTestPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        let cb_clone = Arc::clone(&cb);
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        // Session A: audio-only
+        let session_a = PluginSession::new(SessionId(10), HandleId(10));
+        plugin.create_session(&session_a).await.unwrap();
+        plugin.setup_media(&session_a);
+        plugin
+            .handle_message(
+                &session_a,
+                "txn_sa",
+                json!({"audio": true, "video": false}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Session B: video-only
+        let session_b = PluginSession::new(SessionId(20), HandleId(20));
+        plugin.create_session(&session_b).await.unwrap();
+        plugin.setup_media(&session_b);
+        plugin
+            .handle_message(
+                &session_b,
+                "txn_sb",
+                json!({"audio": false, "video": true}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(plugin.sessions.len(), 2);
+
+        // Session A: audio should echo, video should not
+        plugin.incoming_rtp(&session_a, &make_rtp(false)); // audio
+        assert_eq!(cb_clone.rtp_relayed.load(Ordering::Relaxed), 1);
+        plugin.incoming_rtp(&session_a, &make_rtp(true)); // video
+        assert_eq!(cb_clone.rtp_relayed.load(Ordering::Relaxed), 1); // still 1
+
+        // Session B: video should echo, audio should not
+        plugin.incoming_rtp(&session_b, &make_rtp(true)); // video
+        assert_eq!(cb_clone.rtp_relayed.load(Ordering::Relaxed), 2);
+        plugin.incoming_rtp(&session_b, &make_rtp(false)); // audio
+        assert_eq!(cb_clone.rtp_relayed.load(Ordering::Relaxed), 2); // still 2
+
+        // Verify each session's state independently
+        let info_a = plugin.query_session(&session_a).unwrap();
+        assert_eq!(info_a["audio"], true);
+        assert_eq!(info_a["video"], false);
+
+        let info_b = plugin.query_session(&session_b).unwrap();
+        assert_eq!(info_b["audio"], false);
+        assert_eq!(info_b["video"], true);
+    }
+
+    #[tokio::test]
+    async fn bitrate_field_is_parsed_and_stored() {
+        let mut plugin = EchoTestPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session();
+        plugin.create_session(&session).await.unwrap();
+
+        // Send message with bitrate
+        plugin
+            .handle_message(
+                &session,
+                "txn_br",
+                json!({"audio": true, "video": true, "bitrate": 512000}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["bitrate"], 512000);
+        assert_eq!(info["audio"], true);
+        assert_eq!(info["video"], true);
+    }
+
+    #[tokio::test]
+    async fn setup_media_sets_active_flag() {
+        let mut plugin = EchoTestPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session();
+        plugin.create_session(&session).await.unwrap();
+
+        // Before setup_media, active should be false
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["active"], false);
+
+        // After setup_media, active should be true
+        plugin.setup_media(&session);
+        let info = plugin.query_session(&session).unwrap();
+        assert_eq!(info["active"], true);
+    }
+
+    #[tokio::test]
+    async fn both_audio_video_muted_stops_all_rtp() {
+        let mut plugin = EchoTestPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        let cb_clone = Arc::clone(&cb);
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session();
+        plugin.create_session(&session).await.unwrap();
+        plugin.setup_media(&session);
+
+        // Mute both audio and video
+        plugin
+            .handle_message(
+                &session,
+                "txn_mute",
+                json!({"audio": false, "video": false}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Neither audio nor video should be echoed
+        plugin.incoming_rtp(&session, &make_rtp(false)); // audio
+        assert_eq!(cb_clone.rtp_relayed.load(Ordering::Relaxed), 0);
+
+        plugin.incoming_rtp(&session, &make_rtp(true)); // video
+        assert_eq!(cb_clone.rtp_relayed.load(Ordering::Relaxed), 0);
+
+        // RTCP should still be echoed (it is not gated by audio/video mute)
+        plugin.incoming_rtcp(&session, &make_rtcp());
+        assert_eq!(cb_clone.rtcp_relayed.load(Ordering::Relaxed), 1);
+    }
 }

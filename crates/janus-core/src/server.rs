@@ -14,9 +14,17 @@ use janus_plugin_api::{
 };
 use janus_transport_api::TransportRequest;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, Notify, RwLock};
 use tracing::{debug, info, warn};
+
+/// Per-token permissions for plugin access control.
+#[derive(Debug, Clone, Default)]
+pub struct TokenPermissions {
+    /// If empty, the token can access all plugins. If non-empty, only these plugins.
+    pub allowed_plugins: HashSet<String>,
+}
 
 /// The core Janus server.
 pub struct JanusServer {
@@ -32,13 +40,16 @@ pub struct JanusServer {
     session_clients: Arc<DashMap<SessionId, String>>,
     /// PeerConnection handles by (session_id, handle_id).
     peer_connections: Arc<DashMap<(SessionId, HandleId), PeerConnectionHandle>>,
+    /// Auth tokens (token string → permissions). Only used when token_auth=true.
+    tokens: Arc<RwLock<std::collections::HashMap<String, TokenPermissions>>>,
 }
 
 impl JanusServer {
     /// Create a new server with the given configuration.
     pub fn new(config: JanusConfig) -> Self {
         let sessions = Arc::new(SessionManager::new(config.general.session_timeout));
-        let (_relay_engine, relay_sender) = relay::create_relay(65536);
+        let relay_buffer = config.media.relay_buffer_size;
+        let (_relay_engine, relay_sender) = relay::create_relay(relay_buffer);
         Self {
             config,
             sessions,
@@ -48,6 +59,7 @@ impl JanusServer {
             event_senders: Arc::new(DashMap::new()),
             session_clients: Arc::new(DashMap::new()),
             peer_connections: Arc::new(DashMap::new()),
+            tokens: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -117,18 +129,37 @@ impl JanusServer {
         let janus = message["janus"].as_str().unwrap_or("");
         let transaction = message["transaction"].as_str().unwrap_or("").to_string();
 
-        // Check API secret if configured
-        if let Some(ref secret) = self.config.general.api_secret {
-            let provided = message["apisecret"].as_str().unwrap_or("");
-            if provided != secret {
-                return json!({
-                    "janus": "error",
-                    "transaction": transaction,
-                    "error": {
-                        "code": 403,
-                        "reason": "Unauthorized request (wrong or missing secret)"
-                    }
-                });
+        // Check admin secret for admin API requests
+        if request.admin {
+            if let Some(ref admin_secret) = self.config.admin.admin_secret {
+                let provided = message["admin_secret"].as_str().unwrap_or("");
+                if provided != admin_secret {
+                    return json!({
+                        "janus": "error",
+                        "transaction": transaction,
+                        "error": {
+                            "code": 403,
+                            "reason": "Unauthorized request (wrong or missing admin secret)"
+                        }
+                    });
+                }
+            }
+        }
+
+        // Check API secret if configured (for non-admin requests)
+        if !request.admin {
+            if let Some(ref secret) = self.config.general.api_secret {
+                let provided = message["apisecret"].as_str().unwrap_or("");
+                if provided != secret {
+                    return json!({
+                        "janus": "error",
+                        "transaction": transaction,
+                        "error": {
+                            "code": 403,
+                            "reason": "Unauthorized request (wrong or missing secret)"
+                        }
+                    });
+                }
             }
         }
 
@@ -144,7 +175,8 @@ impl JanusServer {
             "attach" => {
                 let session_id = message["session_id"].as_u64().unwrap_or(0);
                 let plugin = message["plugin"].as_str().unwrap_or("");
-                self.handle_attach(&transaction, SessionId(session_id), plugin)
+                let token = message["token"].as_str().unwrap_or("");
+                self.handle_attach(&transaction, SessionId(session_id), plugin, token)
                     .await
             }
             "detach" => {
@@ -179,6 +211,134 @@ impl JanusServer {
                     &message,
                 )
                 .await
+            }
+            // Admin API: token management
+            "add_token" if request.admin => {
+                let token = message["token"].as_str().unwrap_or("").to_string();
+                if token.is_empty() {
+                    return json!({
+                        "janus": "error",
+                        "transaction": transaction,
+                        "error": { "code": 456, "reason": "Missing token" }
+                    });
+                }
+                self.add_token(&token).await;
+                // Optionally grant plugin access
+                if let Some(plugins) = message["plugins"].as_array() {
+                    for p in plugins {
+                        if let Some(pkg) = p.as_str() {
+                            self.allow_token(&token, pkg).await;
+                        }
+                    }
+                }
+                json!({ "janus": "success", "transaction": transaction })
+            }
+            "remove_token" if request.admin => {
+                let token = message["token"].as_str().unwrap_or("").to_string();
+                if token.is_empty() {
+                    return json!({
+                        "janus": "error",
+                        "transaction": transaction,
+                        "error": { "code": 456, "reason": "Missing token" }
+                    });
+                }
+                self.remove_token(&token).await;
+                json!({ "janus": "success", "transaction": transaction })
+            }
+            "list_sessions" if request.admin => {
+                let session_ids: Vec<u64> =
+                    self.sessions.session_ids().iter().map(|s| s.0).collect();
+                json!({
+                    "janus": "success",
+                    "transaction": transaction,
+                    "sessions": session_ids
+                })
+            }
+            "list_handles" if request.admin => {
+                let session_id = message["session_id"].as_u64().unwrap_or(0);
+                match self.sessions.get_session(SessionId(session_id)) {
+                    Some(session) => {
+                        let handle_ids: Vec<u64> =
+                            session.handles.iter().map(|h| h.handle_id.0).collect();
+                        json!({
+                            "janus": "success",
+                            "transaction": transaction,
+                            "session_id": session_id,
+                            "handles": handle_ids
+                        })
+                    }
+                    None => json!({
+                        "janus": "error",
+                        "transaction": transaction,
+                        "error": {
+                            "code": 458,
+                            "reason": format!("No such session {session_id}")
+                        }
+                    }),
+                }
+            }
+            "handle_info" if request.admin => {
+                let session_id = message["session_id"].as_u64().unwrap_or(0);
+                let handle_id = message["handle_id"].as_u64().unwrap_or(0);
+                match self
+                    .sessions
+                    .get_handle(SessionId(session_id), HandleId(handle_id))
+                {
+                    Ok(handle_info) => {
+                        let mut info = json!({
+                            "session_id": session_id,
+                            "handle_id": handle_id,
+                            "plugin": handle_info.plugin_package,
+                        });
+                        // Merge plugin-specific session info if available
+                        if let Some(plugin) = self.plugins.get(&handle_info.plugin_package) {
+                            if let Ok(plugin_info) =
+                                plugin.query_session(&handle_info.plugin_session())
+                            {
+                                info["plugin_specific"] = plugin_info;
+                            }
+                        }
+                        json!({
+                            "janus": "success",
+                            "transaction": transaction,
+                            "session_id": session_id,
+                            "handle_id": handle_id,
+                            "info": info
+                        })
+                    }
+                    Err(e) => json!({
+                        "janus": "error",
+                        "transaction": transaction,
+                        "error": {
+                            "code": 458,
+                            "reason": e.to_string()
+                        }
+                    }),
+                }
+            }
+            "set_session_timeout" if request.admin => {
+                let timeout = message["timeout"].as_u64().unwrap_or(0);
+                self.sessions.set_session_timeout(timeout);
+                json!({
+                    "janus": "success",
+                    "transaction": transaction,
+                    "timeout": timeout
+                })
+            }
+            "list_tokens" if request.admin => {
+                let tokens = self.tokens.read().await;
+                let token_list: Vec<serde_json::Value> = tokens
+                    .iter()
+                    .map(|(t, perms)| {
+                        let plugins: Vec<&String> = perms.allowed_plugins.iter().collect();
+                        json!({ "token": t, "allowed_plugins": plugins })
+                    })
+                    .collect();
+                json!({
+                    "janus": "success",
+                    "transaction": transaction,
+                    "data": { "tokens": token_list }
+                })
             }
             _ => json!({
                 "janus": "error",
@@ -295,6 +455,7 @@ impl JanusServer {
         transaction: &str,
         session_id: SessionId,
         plugin: &str,
+        token: &str,
     ) -> serde_json::Value {
         // Touch the session to reset timeout and ensure it exists.
         if !self.sessions.touch_session(session_id) {
@@ -304,6 +465,19 @@ impl JanusServer {
                 "error": {
                     "code": 458,
                     "reason": format!("No such session {}", session_id)
+                }
+            });
+        }
+
+        // Check auth token if token_auth is enabled
+        if self.config.general.token_auth && !self.is_token_allowed_for_plugin(token, plugin).await
+        {
+            return json!({
+                "janus": "error",
+                "transaction": transaction,
+                "error": {
+                    "code": 403,
+                    "reason": "Unauthorized (token missing or invalid)"
                 }
             });
         }
@@ -616,6 +790,9 @@ impl JanusServer {
             ice_lite: self.config.nat.ice_lite,
             session: plugin_session.clone(),
             callbacks,
+            rtp_port_min: self.config.media.rtp_port_range_min,
+            rtp_port_max: self.config.media.rtp_port_range_max,
+            nat_1_1_mapping: self.config.nat.nat_1_1_mapping.clone(),
         };
 
         let handle = webrtc::create_peer_connection(config).await?;
@@ -638,6 +815,56 @@ impl JanusServer {
                 let _ = sender.send(event.clone());
             }
         }
+    }
+
+    /// Add an auth token (with no plugin restrictions by default).
+    pub async fn add_token(&self, token: &str) {
+        let mut tokens = self.tokens.write().await;
+        tokens
+            .entry(token.to_string())
+            .or_insert_with(TokenPermissions::default);
+        debug!(token_count = tokens.len(), "auth token added");
+    }
+
+    /// Remove an auth token.
+    pub async fn remove_token(&self, token: &str) -> bool {
+        let mut tokens = self.tokens.write().await;
+        let removed = tokens.remove(token).is_some();
+        if removed {
+            debug!(token_count = tokens.len(), "auth token removed");
+        }
+        removed
+    }
+
+    /// Grant a token access to a specific plugin.
+    pub async fn allow_token(&self, token: &str, plugin: &str) {
+        let mut tokens = self.tokens.write().await;
+        if let Some(perms) = tokens.get_mut(token) {
+            perms.allowed_plugins.insert(plugin.to_string());
+        }
+    }
+
+    /// Check if a token is valid (exists in the store).
+    pub async fn is_token_valid(&self, token: &str) -> bool {
+        let tokens = self.tokens.read().await;
+        tokens.contains_key(token)
+    }
+
+    /// Check if a token can access a specific plugin.
+    pub async fn is_token_allowed_for_plugin(&self, token: &str, plugin: &str) -> bool {
+        let tokens = self.tokens.read().await;
+        match tokens.get(token) {
+            Some(perms) => {
+                // Empty allowed set means all plugins are allowed
+                perms.allowed_plugins.is_empty() || perms.allowed_plugins.contains(plugin)
+            }
+            None => false,
+        }
+    }
+
+    /// Get the token store reference (for transport callbacks).
+    pub fn tokens(&self) -> &Arc<RwLock<std::collections::HashMap<String, TokenPermissions>>> {
+        &self.tokens
     }
 
     /// Signal the server to shut down.
@@ -691,8 +918,13 @@ impl janus_transport_api::TransportCallbacks for CoreTransportCallbacks {
         }
     }
 
-    fn is_auth_token_valid(&self, _token: &str) -> bool {
-        !self.server.config.general.token_auth
+    fn is_auth_token_valid(&self, token: &str) -> bool {
+        if !self.server.config.general.token_auth {
+            return true; // Token auth not enabled, all tokens are "valid"
+        }
+        // Use blocking read since this is a sync method
+        let tokens = self.server.tokens.blocking_read();
+        tokens.contains_key(token)
     }
 }
 
@@ -1458,5 +1690,453 @@ mod tests {
         assert_eq!(resp["janus"], "event");
         assert!(resp["plugindata"]["data"]["echotest"].is_string());
         assert_eq!(resp["sender"], handle_id);
+    }
+
+    // -- Token auth tests --
+
+    fn test_server_with_token_auth() -> Arc<JanusServer> {
+        let mut config = JanusConfig::default();
+        config.general.token_auth = true;
+        Arc::new(JanusServer::new(config))
+    }
+
+    fn test_server_with_admin_secret() -> Arc<JanusServer> {
+        let mut config = JanusConfig::default();
+        config.admin.admin_secret = Some("adminsecret".into());
+        Arc::new(JanusServer::new(config))
+    }
+
+    #[tokio::test]
+    async fn token_add_and_validate() {
+        let server = test_server_with_token_auth();
+        assert!(!server.is_token_valid("mytoken").await);
+        server.add_token("mytoken").await;
+        assert!(server.is_token_valid("mytoken").await);
+    }
+
+    #[tokio::test]
+    async fn token_remove() {
+        let server = test_server_with_token_auth();
+        server.add_token("mytoken").await;
+        assert!(server.is_token_valid("mytoken").await);
+        assert!(server.remove_token("mytoken").await);
+        assert!(!server.is_token_valid("mytoken").await);
+    }
+
+    #[tokio::test]
+    async fn token_remove_nonexistent() {
+        let server = test_server_with_token_auth();
+        assert!(!server.remove_token("notoken").await);
+    }
+
+    #[tokio::test]
+    async fn token_plugin_access_control() {
+        let server = test_server_with_token_auth();
+        server.add_token("mytoken").await;
+        // By default, all plugins allowed
+        assert!(
+            server
+                .is_token_allowed_for_plugin("mytoken", "janus.plugin.echotest")
+                .await
+        );
+        // Restrict to specific plugin
+        server.allow_token("mytoken", "janus.plugin.echotest").await;
+        assert!(
+            server
+                .is_token_allowed_for_plugin("mytoken", "janus.plugin.echotest")
+                .await
+        );
+        assert!(
+            !server
+                .is_token_allowed_for_plugin("mytoken", "janus.plugin.videoroom")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn token_auth_blocks_attach_without_token() {
+        let server = test_server_with_token_auth();
+        register_echotest_plugin(&server).await;
+        let req = TransportRequest::new("test-client");
+
+        // Create session (no token needed for create)
+        let resp = server
+            .process_request(&req, json!({"janus": "create", "transaction": "t1"}))
+            .await;
+        let session_id = resp["data"]["id"].as_u64().unwrap();
+
+        // Attach without token — should fail
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "attach",
+                    "transaction": "t2",
+                    "session_id": session_id,
+                    "plugin": "janus.plugin.echotest"
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "error");
+        assert_eq!(resp["error"]["code"], 403);
+    }
+
+    #[tokio::test]
+    async fn token_auth_allows_attach_with_valid_token() {
+        let server = test_server_with_token_auth();
+        register_echotest_plugin(&server).await;
+        server.add_token("goodtoken").await;
+        let req = TransportRequest::new("test-client");
+
+        let resp = server
+            .process_request(&req, json!({"janus": "create", "transaction": "t1"}))
+            .await;
+        let session_id = resp["data"]["id"].as_u64().unwrap();
+
+        // Attach with valid token
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "attach",
+                    "transaction": "t2",
+                    "session_id": session_id,
+                    "plugin": "janus.plugin.echotest",
+                    "token": "goodtoken"
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+    }
+
+    #[tokio::test]
+    async fn token_auth_rejects_invalid_token() {
+        let server = test_server_with_token_auth();
+        register_echotest_plugin(&server).await;
+        server.add_token("goodtoken").await;
+        let req = TransportRequest::new("test-client");
+
+        let resp = server
+            .process_request(&req, json!({"janus": "create", "transaction": "t1"}))
+            .await;
+        let session_id = resp["data"]["id"].as_u64().unwrap();
+
+        // Attach with bad token
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "attach",
+                    "transaction": "t2",
+                    "session_id": session_id,
+                    "plugin": "janus.plugin.echotest",
+                    "token": "badtoken"
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "error");
+        assert_eq!(resp["error"]["code"], 403);
+    }
+
+    // -- Admin secret tests --
+
+    #[tokio::test]
+    async fn admin_secret_enforced() {
+        let server = test_server_with_admin_secret();
+        let req = TransportRequest::admin("admin-client");
+
+        // Without secret — should fail
+        let resp = server
+            .process_request(&req, json!({"janus": "list_tokens", "transaction": "t1"}))
+            .await;
+        assert_eq!(resp["janus"], "error");
+        assert_eq!(resp["error"]["code"], 403);
+
+        // With wrong secret
+        let resp = server
+            .process_request(
+                &req,
+                json!({"janus": "list_tokens", "transaction": "t2", "admin_secret": "wrong"}),
+            )
+            .await;
+        assert_eq!(resp["janus"], "error");
+
+        // With correct secret
+        let resp = server
+            .process_request(
+                &req,
+                json!({"janus": "list_tokens", "transaction": "t3", "admin_secret": "adminsecret"}),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+    }
+
+    #[tokio::test]
+    async fn admin_api_add_remove_tokens() {
+        let server = test_server_with_admin_secret();
+        let req = TransportRequest::admin("admin-client");
+
+        // Add token
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "add_token",
+                    "transaction": "t1",
+                    "admin_secret": "adminsecret",
+                    "token": "mytoken",
+                    "plugins": ["janus.plugin.echotest"]
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+        assert!(server.is_token_valid("mytoken").await);
+
+        // List tokens
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "list_tokens",
+                    "transaction": "t2",
+                    "admin_secret": "adminsecret"
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+        let tokens = resp["data"]["tokens"].as_array().unwrap();
+        assert_eq!(tokens.len(), 1);
+
+        // Remove token
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "remove_token",
+                    "transaction": "t3",
+                    "admin_secret": "adminsecret",
+                    "token": "mytoken"
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+        assert!(!server.is_token_valid("mytoken").await);
+    }
+
+    #[tokio::test]
+    async fn admin_secret_not_required_for_non_admin() {
+        let server = test_server_with_admin_secret();
+        let req = TransportRequest::new("test-client");
+        // Regular API should not require admin secret
+        let resp = server
+            .process_request(&req, json!({"janus": "ping", "transaction": "t1"}))
+            .await;
+        assert_eq!(resp["janus"], "pong");
+    }
+
+    #[tokio::test]
+    async fn api_secret_not_required_for_admin_api() {
+        // api_secret set but admin API shouldn't need it
+        let mut config = JanusConfig::default();
+        config.general.api_secret = Some("apisecret".into());
+        let server = Arc::new(JanusServer::new(config));
+        let req = TransportRequest::admin("admin-client");
+        // Admin API should still work (no admin_secret configured)
+        let resp = server
+            .process_request(&req, json!({"janus": "list_tokens", "transaction": "t1"}))
+            .await;
+        assert_eq!(resp["janus"], "success");
+    }
+
+    // -- Admin API: list_sessions, list_handles, handle_info, set_session_timeout --
+
+    #[tokio::test]
+    async fn admin_list_sessions() {
+        let server = test_server();
+        let req = TransportRequest::new("test-client");
+        let admin_req = TransportRequest::admin("admin-client");
+
+        // Create 3 sessions
+        for i in 0..3 {
+            server
+                .process_request(
+                    &req,
+                    json!({"janus": "create", "transaction": format!("c{i}")}),
+                )
+                .await;
+        }
+
+        let resp = server
+            .process_request(
+                &admin_req,
+                json!({"janus": "list_sessions", "transaction": "t1"}),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+        let sessions = resp["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn admin_list_handles() {
+        let server = test_server_with_plugin().await;
+        let req = TransportRequest::new("test-client");
+        let admin_req = TransportRequest::admin("admin-client");
+
+        // Create session
+        let resp = server
+            .process_request(&req, json!({"janus": "create", "transaction": "c1"}))
+            .await;
+        let session_id = resp["data"]["id"].as_u64().unwrap();
+
+        // Attach 2 plugins
+        for i in 0..2 {
+            server
+                .process_request(
+                    &req,
+                    json!({
+                        "janus": "attach",
+                        "transaction": format!("a{i}"),
+                        "session_id": session_id,
+                        "plugin": "janus.plugin.echotest"
+                    }),
+                )
+                .await;
+        }
+
+        let resp = server
+            .process_request(
+                &admin_req,
+                json!({
+                    "janus": "list_handles",
+                    "transaction": "t1",
+                    "session_id": session_id
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+        let handles = resp["handles"].as_array().unwrap();
+        assert_eq!(handles.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn admin_list_handles_bad_session() {
+        let server = test_server();
+        let admin_req = TransportRequest::admin("admin-client");
+
+        let resp = server
+            .process_request(
+                &admin_req,
+                json!({
+                    "janus": "list_handles",
+                    "transaction": "t1",
+                    "session_id": 999999
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "error");
+        assert_eq!(resp["error"]["code"], 458);
+    }
+
+    #[tokio::test]
+    async fn admin_handle_info() {
+        let server = test_server_with_plugin().await;
+        let req = TransportRequest::new("test-client");
+        let admin_req = TransportRequest::admin("admin-client");
+
+        let resp = server
+            .process_request(&req, json!({"janus": "create", "transaction": "c1"}))
+            .await;
+        let session_id = resp["data"]["id"].as_u64().unwrap();
+
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "attach",
+                    "transaction": "a1",
+                    "session_id": session_id,
+                    "plugin": "janus.plugin.echotest"
+                }),
+            )
+            .await;
+        let handle_id = resp["data"]["id"].as_u64().unwrap();
+
+        let resp = server
+            .process_request(
+                &admin_req,
+                json!({
+                    "janus": "handle_info",
+                    "transaction": "t1",
+                    "session_id": session_id,
+                    "handle_id": handle_id
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+        assert_eq!(resp["info"]["plugin"], "janus.plugin.echotest");
+        assert!(resp["info"]["plugin_specific"].is_object());
+    }
+
+    #[tokio::test]
+    async fn admin_handle_info_bad_handle() {
+        let server = test_server();
+        let req = TransportRequest::new("test-client");
+        let admin_req = TransportRequest::admin("admin-client");
+
+        let resp = server
+            .process_request(&req, json!({"janus": "create", "transaction": "c1"}))
+            .await;
+        let session_id = resp["data"]["id"].as_u64().unwrap();
+
+        let resp = server
+            .process_request(
+                &admin_req,
+                json!({
+                    "janus": "handle_info",
+                    "transaction": "t1",
+                    "session_id": session_id,
+                    "handle_id": 999999
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "error");
+        assert_eq!(resp["error"]["code"], 458);
+    }
+
+    #[tokio::test]
+    async fn admin_set_session_timeout() {
+        let server = test_server();
+        let admin_req = TransportRequest::admin("admin-client");
+
+        // Default is 60
+        assert_eq!(server.sessions().session_timeout(), 60);
+
+        let resp = server
+            .process_request(
+                &admin_req,
+                json!({
+                    "janus": "set_session_timeout",
+                    "transaction": "t1",
+                    "timeout": 120
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "success");
+        assert_eq!(resp["timeout"], 120);
+        assert_eq!(server.sessions().session_timeout(), 120);
+    }
+
+    #[tokio::test]
+    async fn admin_commands_require_admin_flag() {
+        let server = test_server();
+        let req = TransportRequest::new("test-client"); // NOT admin
+
+        // list_sessions via non-admin should be "unknown request"
+        let resp = server
+            .process_request(&req, json!({"janus": "list_sessions", "transaction": "t1"}))
+            .await;
+        assert_eq!(resp["janus"], "error");
+        assert_eq!(resp["error"]["code"], 455);
     }
 }

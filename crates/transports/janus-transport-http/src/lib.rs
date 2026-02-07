@@ -34,6 +34,8 @@ pub struct HttpTransportConfig {
     pub static_dir: Option<String>,
     /// Enable WHIP/WHEP endpoints (default: true).
     pub whip_whep: bool,
+    /// CORS allowed origin (default: "*").
+    pub cors_allow_origin: String,
 }
 
 impl Default for HttpTransportConfig {
@@ -46,6 +48,7 @@ impl Default for HttpTransportConfig {
             admin_base_path: "/admin".into(),
             static_dir: None,
             whip_whep: true,
+            cors_allow_origin: "*".into(),
         }
     }
 }
@@ -261,7 +264,7 @@ pub async fn start_http_transport(
         let static_dir = std::path::PathBuf::from(dir.clone());
         app = app.fallback(move |req: axum::extract::Request| {
             let dir = static_dir.clone();
-            async move { serve_static_file(dir, req.uri().path()).await }
+            async move { serve_static_file(dir, req).await }
         });
     }
 
@@ -291,11 +294,15 @@ pub async fn start_http_transport(
 }
 
 /// Serve a static file from the given directory.
+/// Supports Cache-Control headers, ETag/If-None-Match, and gzip compression.
 async fn serve_static_file(
     base: std::path::PathBuf,
-    request_path: &str,
-) -> impl axum::response::IntoResponse {
-    use axum::http::{header, StatusCode};
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+
+    let request_path = req.uri().path();
+    let req_headers = req.headers().clone();
 
     // Sanitize path — strip leading slash, resolve index.html for directories
     let rel = request_path.trim_start_matches('/');
@@ -305,9 +312,10 @@ async fn serve_static_file(
     if rel.contains("..") {
         return (
             StatusCode::FORBIDDEN,
-            [(header::CONTENT_TYPE, "text/plain")],
-            "Forbidden".into(),
-        );
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            "Forbidden".as_bytes().to_vec(),
+        )
+            .into_response();
     }
 
     let mut path = base.join(rel);
@@ -315,31 +323,115 @@ async fn serve_static_file(
         path = path.join("index.html");
     }
 
-    match tokio::fs::read(&path).await {
-        Ok(contents) => {
-            let mime = match path.extension().and_then(|e| e.to_str()) {
-                Some("html") => "text/html; charset=utf-8",
-                Some("js") => "application/javascript; charset=utf-8",
-                Some("css") => "text/css; charset=utf-8",
-                Some("json") => "application/json",
-                Some("png") => "image/png",
-                Some("jpg" | "jpeg") => "image/jpeg",
-                Some("gif") => "image/gif",
-                Some("svg") => "image/svg+xml",
-                Some("ico") => "image/x-icon",
-                Some("wasm") => "application/wasm",
-                Some("woff2") => "font/woff2",
-                Some("woff") => "font/woff",
-                _ => "application/octet-stream",
-            };
-            (StatusCode::OK, [(header::CONTENT_TYPE, mime)], contents)
+    let contents = match tokio::fs::read(&path).await {
+        Ok(c) => c,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                "Not Found".as_bytes().to_vec(),
+            )
+                .into_response();
         }
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "text/plain")],
-            b"Not Found".to_vec(),
-        ),
+    };
+
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let mime = match ext {
+        "html" => "text/html; charset=utf-8",
+        "js" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        _ => "application/octet-stream",
+    };
+
+    // Cache-Control by file type
+    let cache_control = match ext {
+        "html" => "no-cache",
+        "js" | "css" | "wasm" => "public, max-age=86400",
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "ico" => "public, max-age=604800",
+        "woff" | "woff2" => "public, max-age=31536000",
+        _ => "public, max-age=3600",
+    };
+
+    // ETag from content length + a simple hash
+    let etag = format!("{:x}-{:x}", contents.len(), simple_hash(&contents));
+
+    // Check If-None-Match
+    if let Some(if_none_match) = req_headers.get(header::IF_NONE_MATCH) {
+        if let Ok(val) = if_none_match.to_str() {
+            let quoted = format!("\"{etag}\"");
+            if val == quoted || val == etag {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::ETAG, HeaderValue::from_str(&quoted).unwrap());
+                headers.insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static(cache_control),
+                );
+                return (StatusCode::NOT_MODIFIED, headers).into_response();
+            }
+        }
     }
+
+    // Gzip compression for text assets > 1KB
+    let is_compressible = matches!(ext, "html" | "js" | "css" | "json" | "svg");
+    let accepts_gzip = req_headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("gzip"))
+        .unwrap_or(false);
+
+    let (body, content_encoding) = if is_compressible && accepts_gzip && contents.len() > 1024 {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        if encoder.write_all(&contents).is_ok() {
+            if let Ok(compressed) = encoder.finish() {
+                (compressed, Some("gzip"))
+            } else {
+                (contents, None)
+            }
+        } else {
+            (contents, None)
+        }
+    } else {
+        (contents, None)
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    headers.insert(
+        header::ETAG,
+        HeaderValue::from_str(&format!("\"{etag}\"")).unwrap(),
+    );
+    if let Some(encoding) = content_encoding {
+        headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static(encoding));
+    }
+
+    (StatusCode::OK, headers, body).into_response()
+}
+
+/// Simple non-cryptographic hash for ETag generation.
+fn simple_hash(data: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
+    for &byte in data {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3); // FNV prime
+    }
+    hash
 }
 
 #[cfg(test)]

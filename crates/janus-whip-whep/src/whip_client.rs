@@ -77,7 +77,7 @@ pub async fn whip_out_publish(
 
     // 1. Create PeerConnection with WhipOut callbacks (no-op on incoming RTP)
     let callbacks: Arc<dyn WebRtcCallbacks> = Arc::new(WhipOutWebRtcCallbacks { relay_id });
-    let pc_handle = create_pc(ice_lite, callbacks).await?;
+    let pc_handle = create_pc(ice_lite, None, callbacks).await?;
 
     // 2. Create SDP offer with audio + video
     let offer_sdp = pc_handle.create_offer(true, true).await?;

@@ -10,6 +10,8 @@ janus-plugin-api.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+dashmap.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

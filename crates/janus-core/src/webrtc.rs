@@ -11,7 +11,7 @@ use std::time::Instant;
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid, Pt};
 use str0m::net::Receive;
-use str0m::{Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
+use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, trace, warn};
@@ -173,6 +173,35 @@ pub struct PcConfig {
     pub ice_lite: bool,
     pub session: PluginSession,
     pub callbacks: Arc<dyn WebRtcCallbacks>,
+    /// RTP port range lower bound (0 = OS-chosen).
+    pub rtp_port_min: u16,
+    /// RTP port range upper bound (0 = OS-chosen).
+    pub rtp_port_max: u16,
+    /// NAT 1:1 public IP mapping. When set, the PeerConnection will
+    /// advertise this IP in SDP instead of the socket's local address.
+    pub nat_1_1_mapping: Option<String>,
+}
+
+/// Bind a UDP socket within a port range.
+/// If min/max are both 0 or min > max, falls back to OS-chosen port.
+async fn bind_udp_in_range(min: u16, max: u16) -> Result<UdpSocket, String> {
+    if min > 0 && max >= min {
+        for port in min..=max {
+            match UdpSocket::bind(format!("0.0.0.0:{port}")).await {
+                Ok(socket) => return Ok(socket),
+                Err(_) => continue,
+            }
+        }
+        // Range exhausted, fall back to OS-chosen port
+        warn!(
+            min = min,
+            max = max,
+            "RTP port range exhausted, falling back to OS-chosen port"
+        );
+    }
+    UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| format!("Failed to bind UDP socket: {e}"))
 }
 
 /// Create a new PeerConnection actor and return its handle.
@@ -187,15 +216,24 @@ pub async fn create_peer_connection(config: PcConfig) -> Result<PeerConnectionHa
         rtc_config
     };
 
-    let rtc = rtc_config.build();
+    let mut rtc = rtc_config.build();
 
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .map_err(|e| format!("Failed to bind UDP socket: {e}"))?;
+    let socket = bind_udp_in_range(config.rtp_port_min, config.rtp_port_max).await?;
     let local_addr = socket
         .local_addr()
         .map_err(|e| format!("Failed to get local addr: {e}"))?;
     debug!(addr = %local_addr, "PeerConnection UDP socket bound");
+
+    // Inject NAT 1:1 mapped public IP so SDP answers contain the public address
+    if let Some(ref public_ip) = config.nat_1_1_mapping {
+        let addr: std::net::SocketAddr = format!("{public_ip}:{}", local_addr.port())
+            .parse()
+            .map_err(|e| format!("Invalid nat_1_1_mapping IP '{public_ip}': {e}"))?;
+        if let Ok(candidate) = Candidate::host(addr, "udp") {
+            debug!(addr = %addr, "injecting NAT 1:1 local candidate");
+            rtc.add_local_candidate(candidate);
+        }
+    }
 
     let actor = PeerConnectionActor {
         rtc,
@@ -564,6 +602,9 @@ mod tests {
             ice_lite: true,
             session,
             callbacks,
+            rtp_port_min: 0,
+            rtp_port_max: 0,
+            nat_1_1_mapping: None,
         };
 
         let handle = create_peer_connection(config).await.unwrap();
@@ -589,6 +630,9 @@ mod tests {
             ice_lite: true,
             session,
             callbacks,
+            rtp_port_min: 0,
+            rtp_port_max: 0,
+            nat_1_1_mapping: None,
         };
 
         let handle = create_peer_connection(config).await.unwrap();
@@ -606,6 +650,9 @@ mod tests {
             ice_lite: true,
             session,
             callbacks,
+            rtp_port_min: 0,
+            rtp_port_max: 0,
+            nat_1_1_mapping: None,
         };
 
         let handle = create_peer_connection(config).await.unwrap();

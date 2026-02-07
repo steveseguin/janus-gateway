@@ -108,11 +108,20 @@ impl VideoRoomPlugin {
         session: &PluginSession,
         room_id: RoomId,
         display: Option<String>,
+        pin: Option<&str>,
     ) -> Result<serde_json::Value, String> {
         let room = self
             .rooms
             .get(room_id)
             .ok_or_else(|| format!("No such room {room_id}"))?;
+
+        // Validate PIN if required
+        if let Some(ref room_pin) = room.config.pin {
+            let provided = pin.unwrap_or("");
+            if provided != room_pin {
+                return Err("Unauthorized (wrong pin)".into());
+            }
+        }
 
         // Check max publishers
         if room.publishers.len() as u32 >= room.config.max_publishers {
@@ -182,11 +191,20 @@ impl VideoRoomPlugin {
         session: &PluginSession,
         room_id: RoomId,
         feed: u64,
+        pin: Option<&str>,
     ) -> Result<serde_json::Value, String> {
         let room = self
             .rooms
             .get(room_id)
             .ok_or_else(|| format!("No such room {room_id}"))?;
+
+        // Validate PIN if required
+        if let Some(ref room_pin) = room.config.pin {
+            let provided = pin.unwrap_or("");
+            if provided != room_pin {
+                return Err("Unauthorized (wrong pin)".into());
+            }
+        }
 
         // Verify the feed exists
         if !room.publishers.contains_key(&feed) {
@@ -501,6 +519,17 @@ impl janus_plugin_api::JanusPlugin for VideoRoomPlugin {
                 let room_id = msg
                     .room
                     .ok_or_else(|| janus_plugin_api::Error::Plugin("Missing room ID".into()))?;
+                // Validate secret if required
+                if let Some(room) = self.rooms.get(room_id) {
+                    if let Some(ref room_secret) = room.config.secret {
+                        let provided = msg.secret.as_deref().unwrap_or("");
+                        if provided != room_secret {
+                            return Err(janus_plugin_api::Error::Plugin(
+                                "Unauthorized (wrong secret)".into(),
+                            ));
+                        }
+                    }
+                }
                 self.rooms.destroy(room_id).ok_or_else(|| {
                     janus_plugin_api::Error::Plugin(format!("No such room {room_id}"))
                 })?;
@@ -568,7 +597,12 @@ impl janus_plugin_api::JanusPlugin for VideoRoomPlugin {
                 match ptype {
                     "publisher" => {
                         let result = self
-                            .handle_join_publisher(session, room_id, msg.display)
+                            .handle_join_publisher(
+                                session,
+                                room_id,
+                                msg.display,
+                                msg.pin.as_deref(),
+                            )
                             .map_err(janus_plugin_api::Error::Plugin)?;
                         Ok(PluginResult::Ok(PluginResultPayload {
                             body: result,
@@ -580,7 +614,7 @@ impl janus_plugin_api::JanusPlugin for VideoRoomPlugin {
                             janus_plugin_api::Error::Plugin("Missing feed ID for subscriber".into())
                         })?;
                         let result = self
-                            .handle_join_subscriber(session, room_id, feed)
+                            .handle_join_subscriber(session, room_id, feed, msg.pin.as_deref())
                             .map_err(janus_plugin_api::Error::Plugin)?;
 
                         // For subscriber, if there's a JSEP offer the core should
@@ -1454,6 +1488,518 @@ mod tests {
         assert!(!raw.is_null());
         unsafe {
             let _ = janus_plugin_api::from_ffi_plugin(raw);
+        }
+    }
+
+    // -- PIN validation tests --
+
+    #[tokio::test]
+    async fn join_with_wrong_pin_errors() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        // Create a PIN-protected room
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5555, "pin": "1234"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Try joining with wrong PIN
+        let result = plugin
+            .handle_message(
+                &session,
+                "t2",
+                json!({"request": "join", "room": 5555, "ptype": "publisher", "pin": "wrong"}),
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("pin"));
+    }
+
+    #[tokio::test]
+    async fn join_with_correct_pin_succeeds() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        // Create a PIN-protected room
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5556, "pin": "1234"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Join with correct PIN
+        let result = plugin
+            .handle_message(
+                &session,
+                "t2",
+                json!({"request": "join", "room": 5556, "ptype": "publisher", "pin": "1234"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        match result {
+            PluginResult::Ok(payload) => {
+                assert_eq!(payload.body["videoroom"], "joined");
+            }
+            _ => panic!("expected Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn join_without_pin_when_required_errors() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5557, "pin": "secret"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Join without providing PIN
+        let result = plugin
+            .handle_message(
+                &session,
+                "t2",
+                json!({"request": "join", "room": 5557, "ptype": "publisher"}),
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    // -- Secret validation tests --
+
+    #[tokio::test]
+    async fn destroy_room_with_wrong_secret_fails() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        // Create room with secret
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5558, "secret": "admin123"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Destroy with wrong secret
+        let result = plugin
+            .handle_message(
+                &session,
+                "t2",
+                json!({"request": "destroy", "room": 5558, "secret": "wrong"}),
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("secret"));
+
+        // Room still exists
+        assert!(plugin.rooms.exists(5558));
+    }
+
+    #[tokio::test]
+    async fn destroy_room_with_correct_secret_succeeds() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5559, "secret": "admin123"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Destroy with correct secret
+        let result = plugin
+            .handle_message(
+                &session,
+                "t2",
+                json!({"request": "destroy", "room": 5559, "secret": "admin123"}),
+                None,
+            )
+            .await
+            .unwrap();
+        match result {
+            PluginResult::Ok(payload) => {
+                assert_eq!(payload.body["videoroom"], "destroyed");
+            }
+            _ => panic!("expected Ok"),
+        }
+        assert!(!plugin.rooms.exists(5559));
+    }
+
+    // -- Max publishers limit --
+
+    #[tokio::test]
+    async fn max_publishers_enforced() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        // Create a room with max 2 publishers
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5560, "max_publishers": 2}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Join first publisher
+        let s1 = test_session(10, 10);
+        plugin.create_session(&s1).await.unwrap();
+        plugin
+            .handle_message(
+                &s1,
+                "t2",
+                json!({"request": "join", "room": 5560, "ptype": "publisher"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Join second publisher
+        let s2 = test_session(20, 20);
+        plugin.create_session(&s2).await.unwrap();
+        plugin
+            .handle_message(
+                &s2,
+                "t3",
+                json!({"request": "join", "room": 5560, "ptype": "publisher"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Third publisher should fail
+        let s3 = test_session(30, 30);
+        plugin.create_session(&s3).await.unwrap();
+        let result = plugin
+            .handle_message(
+                &s3,
+                "t4",
+                json!({"request": "join", "room": 5560, "ptype": "publisher"}),
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("full"));
+    }
+
+    // -- List rooms hides private --
+
+    #[tokio::test]
+    async fn list_rooms_hides_private() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        // Create a private room
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5561, "is_private": true}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // List should not include the private room
+        let result = plugin
+            .handle_message(&session, "t2", json!({"request": "list"}), None)
+            .await
+            .unwrap();
+        match result {
+            PluginResult::Ok(payload) => {
+                let list = payload.body["list"].as_array().unwrap();
+                for room in list {
+                    assert_ne!(room["room"], 5561);
+                }
+            }
+            _ => panic!("expected Ok"),
+        }
+    }
+
+    // -- Subscriber PIN validation --
+
+    #[tokio::test]
+    async fn subscriber_with_wrong_pin_errors() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let session = test_session(1, 1);
+        plugin.create_session(&session).await.unwrap();
+
+        // Create PIN-protected room
+        plugin
+            .handle_message(
+                &session,
+                "t1",
+                json!({"request": "create", "room": 5562, "pin": "secret"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Publisher joins with correct PIN
+        let pub_session = test_session(10, 10);
+        plugin.create_session(&pub_session).await.unwrap();
+        let pub_result = plugin
+            .handle_message(
+                &pub_session,
+                "t2",
+                json!({
+                    "request": "join",
+                    "room": 5562,
+                    "ptype": "publisher",
+                    "pin": "secret"
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+        let pub_user_id = match pub_result {
+            PluginResult::Ok(p) => p.body["id"].as_u64().unwrap(),
+            _ => panic!("expected Ok"),
+        };
+
+        // Subscriber joins with wrong PIN
+        let sub_session = test_session(20, 20);
+        plugin.create_session(&sub_session).await.unwrap();
+        let result = plugin
+            .handle_message(
+                &sub_session,
+                "t3",
+                json!({
+                    "request": "join",
+                    "room": 5562,
+                    "ptype": "subscriber",
+                    "feed": pub_user_id,
+                    "pin": "wrong"
+                }),
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    // -- Unpublish notifications --
+
+    #[tokio::test]
+    async fn unpublish_sends_notification() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        let cb_clone = Arc::clone(&cb);
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        // Two publishers join
+        let s1 = test_session(1, 1);
+        plugin.create_session(&s1).await.unwrap();
+        plugin
+            .handle_message(
+                &s1,
+                "t1",
+                json!({"request": "join", "room": 1234, "ptype": "publisher"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let s2 = test_session(2, 2);
+        plugin.create_session(&s2).await.unwrap();
+        // s2 joining triggers notification to s1
+        let events_before = cb_clone.events_pushed.load(Ordering::Relaxed);
+        plugin
+            .handle_message(
+                &s2,
+                "t2",
+                json!({"request": "join", "room": 1234, "ptype": "publisher"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Wait for async notification
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events_after = cb_clone.events_pushed.load(Ordering::Relaxed);
+        assert!(
+            events_after > events_before,
+            "join should notify existing publishers"
+        );
+
+        // Unpublish s2
+        let events_before2 = cb_clone.events_pushed.load(Ordering::Relaxed);
+        plugin
+            .handle_message(&s2, "t3", json!({"request": "unpublish"}), None)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events_after2 = cb_clone.events_pushed.load(Ordering::Relaxed);
+        assert!(
+            events_after2 > events_before2,
+            "unpublish should notify other publishers"
+        );
+    }
+
+    // -- Subscriber detach cleanup --
+
+    #[tokio::test]
+    async fn subscriber_detach_cleans_up() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        // Publisher joins
+        let pub_session = test_session(1, 1);
+        plugin.create_session(&pub_session).await.unwrap();
+        let pub_result = plugin
+            .handle_message(
+                &pub_session,
+                "t1",
+                json!({"request": "join", "room": 1234, "ptype": "publisher"}),
+                None,
+            )
+            .await
+            .unwrap();
+        let pub_user_id = match pub_result {
+            PluginResult::Ok(p) => p.body["id"].as_u64().unwrap(),
+            _ => panic!("expected Ok"),
+        };
+
+        // Subscriber joins
+        let sub_session = test_session(2, 2);
+        plugin.create_session(&sub_session).await.unwrap();
+        plugin
+            .handle_message(
+                &sub_session,
+                "t2",
+                json!({
+                    "request": "join",
+                    "room": 1234,
+                    "ptype": "subscriber",
+                    "feed": pub_user_id
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let room = plugin.rooms.get(1234).unwrap();
+        assert_eq!(room.subscribers.len(), 1);
+
+        // Destroy subscriber session (simulates detach)
+        plugin.destroy_session(&sub_session).await.unwrap();
+        assert_eq!(room.subscribers.len(), 0);
+    }
+
+    // -- Listparticipants with display names --
+
+    #[tokio::test]
+    async fn listparticipants_returns_display_names() {
+        let mut plugin = VideoRoomPlugin::default();
+        let cb = Arc::new(MockCallbacks::new());
+        plugin.init(cb, Path::new("/tmp")).await.unwrap();
+
+        let s1 = test_session(1, 1);
+        plugin.create_session(&s1).await.unwrap();
+        plugin
+            .handle_message(
+                &s1,
+                "t1",
+                json!({"request": "join", "room": 1234, "ptype": "publisher", "display": "Alice"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let s2 = test_session(2, 2);
+        plugin.create_session(&s2).await.unwrap();
+        plugin
+            .handle_message(
+                &s2,
+                "t2",
+                json!({"request": "join", "room": 1234, "ptype": "publisher", "display": "Bob"}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let result = plugin
+            .handle_message(
+                &s1,
+                "t3",
+                json!({"request": "listparticipants", "room": 1234}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        match result {
+            PluginResult::Ok(payload) => {
+                let participants = payload.body["participants"].as_array().unwrap();
+                assert_eq!(participants.len(), 2);
+                let displays: Vec<&str> = participants
+                    .iter()
+                    .filter_map(|p| p["display"].as_str())
+                    .collect();
+                assert!(displays.contains(&"Alice"));
+                assert!(displays.contains(&"Bob"));
+            }
+            _ => panic!("expected Ok"),
         }
     }
 }

@@ -97,6 +97,8 @@ pub struct WhipWhepState {
     pub ice_servers: Arc<Vec<IceServer>>,
     /// Whether to use ICE-lite for new PeerConnections.
     pub ice_lite: bool,
+    /// NAT 1:1 public IP mapping for PeerConnection candidates.
+    pub nat_1_1_mapping: Option<String>,
 }
 
 impl WhipWhepState {
@@ -108,6 +110,7 @@ impl WhipWhepState {
             fanout: Arc::new(FanOut::new()),
             ice_servers: Arc::new(ice_servers),
             ice_lite: nat_config.ice_lite,
+            nat_1_1_mapping: nat_config.nat_1_1_mapping.clone(),
         }
     }
 }
