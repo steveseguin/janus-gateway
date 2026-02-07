@@ -10,7 +10,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-uuid.workspace = true
+getrandom = "0.2"
 tracing.workspace = true
 
 [dev-dependencies]

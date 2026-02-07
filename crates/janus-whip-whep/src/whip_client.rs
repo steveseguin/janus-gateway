@@ -5,6 +5,10 @@
 
 use crate::handlers::create_pc;
 use crate::state::ResourceId;
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use janus_core::webrtc::{PeerConnectionHandle, WebRtcCallbacks};
 use janus_plugin_api::{PluginSession, RtcpPacket, RtpPacket};
 use std::sync::Arc;
@@ -17,6 +21,19 @@ pub struct WhipOutConfig {
     pub endpoint_url: String,
     /// Optional Bearer token for authentication.
     pub bearer_token: Option<String>,
+}
+
+/// Build a hyper HTTPS client using rustls.
+fn https_client() -> Client<
+    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+    Full<Bytes>,
+> {
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .build();
+    Client::builder(TokioExecutor::new()).build(https)
 }
 
 /// Perform outgoing WHIP signaling.
@@ -38,23 +55,39 @@ pub async fn whip_out_publish(
     let offer_sdp = pc_handle.create_offer(true, true).await?;
 
     // 3. POST offer to remote WHIP endpoint
-    let client = reqwest::Client::new();
-    let mut request = client
-        .post(&config.endpoint_url)
-        .header("Content-Type", "application/sdp")
-        .body(offer_sdp);
+    let uri: hyper::Uri = config
+        .endpoint_url
+        .parse()
+        .map_err(|e| format!("Invalid WHIP endpoint URL: {e}"))?;
+
+    let mut builder = hyper::Request::builder()
+        .method(hyper::Method::POST)
+        .uri(&uri)
+        .header("Content-Type", "application/sdp");
+
     if let Some(token) = &config.bearer_token {
-        request = request.bearer_auth(token);
+        builder = builder.header("Authorization", format!("Bearer {token}"));
     }
 
-    let response = request
-        .send()
+    let req = builder
+        .body(Full::new(Bytes::from(offer_sdp)))
+        .map_err(|e| format!("Failed to build WHIP-out request: {e}"))?;
+
+    let client = https_client();
+    let response = client
+        .request(req)
         .await
         .map_err(|e| format!("WHIP-out POST failed: {e}"))?;
 
-    if response.status() != reqwest::StatusCode::CREATED {
+    if response.status() != hyper::StatusCode::CREATED {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map(|c| c.to_bytes())
+            .unwrap_or_default();
+        let body = String::from_utf8_lossy(&body_bytes);
         return Err(format!("Remote WHIP endpoint returned {status}: {body}"));
     }
 
@@ -66,10 +99,14 @@ pub async fn whip_out_publish(
         .map(|s| s.to_string());
 
     // 5. Read the SDP answer
-    let answer_sdp = response
-        .text()
+    let body_bytes = response
+        .into_body()
+        .collect()
         .await
-        .map_err(|e| format!("Failed to read WHIP-out answer body: {e}"))?;
+        .map_err(|e| format!("Failed to read WHIP-out answer body: {e}"))?
+        .to_bytes();
+    let answer_sdp =
+        String::from_utf8(body_bytes.to_vec()).map_err(|e| format!("Invalid UTF-8 in SDP: {e}"))?;
 
     // 6. Apply the remote answer
     pc_handle.set_remote_answer(answer_sdp).await?;
@@ -86,14 +123,25 @@ pub async fn whip_out_publish(
 
 /// Delete a WHIP-out resource on the remote server.
 pub async fn whip_out_delete(resource_url: &str, bearer_token: Option<&str>) -> Result<(), String> {
-    let client = reqwest::Client::new();
-    let mut request = client.delete(resource_url);
+    let uri: hyper::Uri = resource_url
+        .parse()
+        .map_err(|e| format!("Invalid resource URL: {e}"))?;
+
+    let mut builder = hyper::Request::builder()
+        .method(hyper::Method::DELETE)
+        .uri(&uri);
+
     if let Some(token) = bearer_token {
-        request = request.bearer_auth(token);
+        builder = builder.header("Authorization", format!("Bearer {token}"));
     }
 
-    let response = request
-        .send()
+    let req = builder
+        .body(Full::new(Bytes::new()))
+        .map_err(|e| format!("Failed to build DELETE request: {e}"))?;
+
+    let client = https_client();
+    let response = client
+        .request(req)
         .await
         .map_err(|e| format!("WHIP-out DELETE failed: {e}"))?;
 

@@ -15,11 +15,13 @@ dashmap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-uuid.workspace = true
 str0m.workspace = true
+getrandom = "0.2"
 tower.workspace = true
-tower-http.workspace = true
-reqwest.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+hyper-rustls.workspace = true
+http-body-util.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

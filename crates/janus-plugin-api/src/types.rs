@@ -2,7 +2,34 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use uuid::Uuid;
+
+/// Generate 16 random bytes using the OS CSPRNG.
+fn random_bytes_16() -> [u8; 16] {
+    let mut buf = [0u8; 16];
+    getrandom::getrandom(&mut buf).expect("getrandom failed");
+    buf
+}
+
+/// Generate a UUID v4 string (hyphenated).
+pub fn uuid_v4() -> String {
+    let mut b = random_bytes_16();
+    // Set version (4) and variant (RFC 4122)
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+    )
+}
+
+/// Generate a UUID v4 as simple hex (no hyphens).
+pub fn uuid_v4_simple() -> String {
+    let mut b = random_bytes_16();
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    b.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 // ---------------------------------------------------------------------------
 // Identifiers
@@ -18,8 +45,7 @@ impl SessionId {
     /// The value is constrained to `[1, 2^53 - 1]` so that JavaScript
     /// clients can represent it exactly as a `Number`.
     pub fn random() -> Self {
-        let uuid = Uuid::new_v4();
-        let bytes = uuid.as_bytes();
+        let bytes = random_bytes_16();
         let val = u64::from_le_bytes(bytes[..8].try_into().unwrap());
         // Mask to 53 bits and ensure non-zero.
         let safe = (val & 0x001F_FFFF_FFFF_FFFF) | 1;
@@ -43,8 +69,7 @@ impl HandleId {
     /// The value is constrained to `[1, 2^53 - 1]` so that JavaScript
     /// clients can represent it exactly as a `Number`.
     pub fn random() -> Self {
-        let uuid = Uuid::new_v4();
-        let bytes = uuid.as_bytes();
+        let bytes = random_bytes_16();
         let val = u64::from_le_bytes(bytes[..8].try_into().unwrap());
         // Mask to 53 bits and ensure non-zero.
         let safe = (val & 0x001F_FFFF_FFFF_FFFF) | 1;

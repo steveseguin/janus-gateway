@@ -5,17 +5,23 @@ use crate::link_headers::IceServer;
 use dashmap::DashMap;
 use janus_core::config::NatConfig;
 use janus_core::webrtc::PeerConnectionHandle;
+use janus_plugin_api::uuid_v4_simple;
 use std::sync::Arc;
 use std::time::Instant;
-use uuid::Uuid;
 
 /// Unique identifier for a WHIP/WHEP resource.
+/// Stored as 16 raw bytes (UUID v4), displayed as hyphenated hex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ResourceId(pub Uuid);
+pub struct ResourceId([u8; 16]);
 
 impl Default for ResourceId {
     fn default() -> Self {
-        Self(Uuid::new_v4())
+        let mut b = [0u8; 16];
+        getrandom::getrandom(&mut b).expect("getrandom failed");
+        // Set version (4) and variant (RFC 4122)
+        b[6] = (b[6] & 0x0f) | 0x40;
+        b[8] = (b[8] & 0x3f) | 0x80;
+        Self(b)
     }
 }
 
@@ -27,14 +33,29 @@ impl ResourceId {
 
 impl std::fmt::Display for ResourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        let b = &self.0;
+        write!(
+            f,
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+            b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+        )
     }
 }
 
 impl std::str::FromStr for ResourceId {
-    type Err = uuid::Error;
+    type Err = &'static str;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Uuid::parse_str(s)?))
+        let hex: String = s.chars().filter(|c| *c != '-').collect();
+        if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err("invalid resource ID format");
+        }
+        let mut b = [0u8; 16];
+        for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+            b[i] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16)
+                .map_err(|_| "invalid hex")?;
+        }
+        Ok(Self(b))
     }
 }
 
@@ -93,7 +114,7 @@ impl WhipWhepState {
 
 /// Generate a random ETag string for ICE session identity.
 pub fn generate_etag() -> String {
-    Uuid::new_v4().simple().to_string()
+    uuid_v4_simple()
 }
 
 #[cfg(test)]

@@ -38,9 +38,11 @@ str0m = "0.11"
 axum = { version = "0.7", features = ["ws"] }
 tokio-tungstenite = "0.24"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs"] }
 futures-util = "0.3"
-reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "tls12", "ring", "webpki-tokio"] }
+http-body-util = "0.1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -53,7 +55,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Data structures
 dashmap = "6"
-uuid = { version = "1", features = ["v4"] }
 
 # Plugin loading
 libloading = "0.8"

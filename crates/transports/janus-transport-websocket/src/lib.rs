@@ -5,6 +5,7 @@
 
 use dashmap::DashMap;
 use janus_core::server::JanusServer;
+use janus_plugin_api::uuid_v4;
 use janus_transport_api::TransportRequest;
 use serde_json::json;
 use std::net::SocketAddr;
@@ -12,7 +13,6 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use tokio_tungstenite::tungstenite::Message;
 
@@ -127,7 +127,7 @@ async fn handle_connection(
     use futures_util::{SinkExt, StreamExt};
 
     let ws_stream = tokio_tungstenite::accept_async(stream).await?;
-    let client_id = Uuid::new_v4().to_string();
+    let client_id = uuid_v4();
 
     info!(client_id = %client_id, peer = %peer_addr, "WebSocket connected");
 

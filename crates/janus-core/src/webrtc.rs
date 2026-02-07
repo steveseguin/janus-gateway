@@ -336,8 +336,8 @@ impl PeerConnectionActor {
                             );
                             // str0m ICE-lite doesn't fully support restart;
                             // generate new local credentials as a best-effort.
-                            let local_ufrag = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-                            let local_pwd = uuid::Uuid::new_v4().simple().to_string();
+                            let local_ufrag = janus_plugin_api::uuid_v4_simple()[..8].to_string();
+                            let local_pwd = janus_plugin_api::uuid_v4_simple();
                             let _ = (&remote_ufrag, &remote_pwd);
                             let _ = reply.send(Ok((local_ufrag, local_pwd)));
                         }

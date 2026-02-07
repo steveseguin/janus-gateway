@@ -12,13 +12,13 @@ use axum::{
 };
 use dashmap::DashMap;
 use janus_core::server::JanusServer;
+use janus_plugin_api::uuid_v4;
 use janus_transport_api::TransportRequest;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
-use uuid::Uuid;
 
 /// HTTP transport configuration.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -98,7 +98,7 @@ async fn handle_janus_request(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let is_create = body["janus"].as_str() == Some("create");
-    let client_id = Uuid::new_v4().to_string();
+    let client_id = uuid_v4();
 
     // For session creation, register an event sender before processing
     if is_create {
@@ -142,7 +142,7 @@ async fn handle_session_request(
         .session_clients
         .get(&session_id)
         .map(|r| r.value().clone())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+        .unwrap_or_else(uuid_v4);
     let request = TransportRequest::new(&client_id);
     let response = state.server.process_request(&request, body).await;
 
@@ -169,7 +169,7 @@ async fn handle_handle_request(
         .session_clients
         .get(&session_id)
         .map(|r| r.value().clone())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+        .unwrap_or_else(uuid_v4);
     let request = TransportRequest::new(&client_id);
     let response = state.server.process_request(&request, body).await;
     (StatusCode::OK, Json(response))
@@ -232,7 +232,7 @@ async fn handle_admin_request(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    let client_id = Uuid::new_v4().to_string();
+    let client_id = uuid_v4();
     let request = TransportRequest::admin(&client_id);
     let response = state.server.process_request(&request, body).await;
     (StatusCode::OK, Json(response))
@@ -257,9 +257,12 @@ pub async fn start_http_transport(
 
     // Serve static files as a fallback if configured
     if let Some(ref dir) = config.static_dir {
-        use tower_http::services::ServeDir;
         info!(directory = %dir, "serving static files");
-        app = app.fallback_service(ServeDir::new(dir));
+        let static_dir = std::path::PathBuf::from(dir.clone());
+        app = app.fallback(move |req: axum::extract::Request| {
+            let dir = static_dir.clone();
+            async move { serve_static_file(dir, req.uri().path()).await }
+        });
     }
 
     info!(address = %addr, "HTTP transport listening");
@@ -285,6 +288,58 @@ pub async fn start_http_transport(
     }
 
     Ok(())
+}
+
+/// Serve a static file from the given directory.
+async fn serve_static_file(
+    base: std::path::PathBuf,
+    request_path: &str,
+) -> impl axum::response::IntoResponse {
+    use axum::http::{header, StatusCode};
+
+    // Sanitize path — strip leading slash, resolve index.html for directories
+    let rel = request_path.trim_start_matches('/');
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+
+    // Prevent directory traversal
+    if rel.contains("..") {
+        return (
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, "text/plain")],
+            "Forbidden".into(),
+        );
+    }
+
+    let mut path = base.join(rel);
+    if path.is_dir() {
+        path = path.join("index.html");
+    }
+
+    match tokio::fs::read(&path).await {
+        Ok(contents) => {
+            let mime = match path.extension().and_then(|e| e.to_str()) {
+                Some("html") => "text/html; charset=utf-8",
+                Some("js") => "application/javascript; charset=utf-8",
+                Some("css") => "text/css; charset=utf-8",
+                Some("json") => "application/json",
+                Some("png") => "image/png",
+                Some("jpg" | "jpeg") => "image/jpeg",
+                Some("gif") => "image/gif",
+                Some("svg") => "image/svg+xml",
+                Some("ico") => "image/x-icon",
+                Some("wasm") => "application/wasm",
+                Some("woff2") => "font/woff2",
+                Some("woff") => "font/woff",
+                _ => "application/octet-stream",
+            };
+            (StatusCode::OK, [(header::CONTENT_TYPE, mime)], contents)
+        }
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "text/plain")],
+            b"Not Found".to_vec(),
+        ),
+    }
 }
 
 #[cfg(test)]
