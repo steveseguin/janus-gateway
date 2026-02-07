@@ -217,8 +217,22 @@ impl JanusServer {
             "version_string": env!("CARGO_PKG_VERSION"),
             "author": "Steve Seguin (Rust rewrite)",
             "data_channels": true,
+            "accepting-new-sessions": true,
             "session-timeout": self.config.general.session_timeout,
+            "reclaim-session-timeout": self.config.general.reclaim_session_timeout,
+            "candidates-timeout": 45,
+            "server_name": self.config.general.server_name,
+            "local-ip": self.config.nat.nat_1_1_mapping.as_deref().unwrap_or("auto"),
+            "ice-lite": self.config.nat.ice_lite,
+            "ice-tcp": false,
+            "full-trickle": false,
+            "ipv6": false,
+            "api_secret": self.config.general.api_secret.is_some(),
+            "auth_token": self.config.general.token_auth,
             "plugins": plugins_obj,
+            "transports": {},
+            "events": {},
+            "loggers": {},
         })
     }
 

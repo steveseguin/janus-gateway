@@ -180,12 +180,10 @@ impl janus_plugin_api::JanusPlugin for EchoTestPlugin {
             ));
         }
 
-        // Build the response
+        // Build the response (matches C Janus echotest format)
         let result_body = json!({
             "echotest": "event",
             "result": "ok",
-            "audio": msg.audio,
-            "video": msg.video,
         });
 
         // If there's a JSEP offer, signal the core to handle WebRTC negotiation.
@@ -419,8 +417,7 @@ mod tests {
         match result {
             PluginResult::Ok(payload) => {
                 assert_eq!(payload.body["echotest"], "event");
-                assert_eq!(payload.body["audio"], false);
-                assert_eq!(payload.body["video"], true);
+                assert_eq!(payload.body["result"], "ok");
                 assert!(payload.jsep.is_none());
             }
             _ => panic!("expected Ok result"),

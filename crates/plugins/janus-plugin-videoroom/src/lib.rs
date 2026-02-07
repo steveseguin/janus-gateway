@@ -88,10 +88,12 @@ struct VideoRoomRequest {
     pin: Option<String>,
     #[serde(default)]
     secret: Option<String>,
-    // Audio/video toggles for configure
+    // Audio/video toggles for configure (deserialized for future use)
     #[serde(default = "default_true")]
+    #[allow(dead_code)]
     audio: bool,
     #[serde(default = "default_true")]
+    #[allow(dead_code)]
     video: bool,
 }
 
@@ -226,7 +228,6 @@ impl VideoRoomPlugin {
             "videoroom": "attached",
             "room": room_id,
             "id": feed,
-            "display": room.publishers.get(&feed).map(|p| p.display.clone()),
         }))
     }
 
@@ -622,8 +623,6 @@ impl janus_plugin_api::JanusPlugin for VideoRoomPlugin {
                 let result = json!({
                     "videoroom": "event",
                     "configured": "ok",
-                    "audio": msg.audio,
-                    "video": msg.video,
                 });
 
                 // If there's a JSEP offer, delegate to core for WebRTC setup

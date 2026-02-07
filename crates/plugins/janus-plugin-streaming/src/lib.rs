@@ -270,6 +270,12 @@ impl janus_plugin_api::JanusPlugin for StreamingPlugin {
                     body: json!({
                         "streaming": "created",
                         "created": mp.id,
+                        "permanent": false,
+                        "stream": {
+                            "id": mp.id,
+                            "description": mp.config.description,
+                            "is_private": mp.config.is_private,
+                        },
                     }),
                     jsep: None,
                 }))
