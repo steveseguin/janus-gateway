@@ -10,16 +10,14 @@ janus-plugin-api.workspace = true
 janus-transport-api.workspace = true
 janus-core.workspace = true
 
-async-trait.workspace = true
 tokio.workspace = true
 axum.workspace = true
-tower.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 dashmap.workspace = true
-thiserror.workspace = true
 janus-whip-whep.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
+tower.workspace = true

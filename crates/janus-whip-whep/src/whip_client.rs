@@ -2,6 +2,8 @@
 //!
 //! Our server acts as a WHIP *client*: it creates a PeerConnection, generates an
 //! SDP offer, POSTs it to a remote WHIP endpoint, and applies the returned answer.
+//!
+//! Enable the `tls` feature for HTTPS support.
 
 use crate::handlers::create_pc;
 use crate::state::ResourceId;
@@ -23,8 +25,9 @@ pub struct WhipOutConfig {
     pub bearer_token: Option<String>,
 }
 
-/// Build a hyper HTTPS client using rustls.
-fn https_client() -> Client<
+/// Build a hyper HTTPS client using rustls (requires `tls` feature).
+#[cfg(feature = "tls")]
+fn build_client() -> Client<
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
     Full<Bytes>,
 > {
@@ -34,6 +37,29 @@ fn https_client() -> Client<
         .enable_http1()
         .build();
     Client::builder(TokioExecutor::new()).build(https)
+}
+
+/// Build a hyper HTTP-only client (no TLS — enable the `tls` feature for HTTPS).
+#[cfg(not(feature = "tls"))]
+fn build_client() -> Client<hyper_util::client::legacy::connect::HttpConnector, Full<Bytes>> {
+    Client::builder(TokioExecutor::new()).build_http()
+}
+
+/// Validate the URL scheme. Without `tls`, only HTTP is supported.
+#[cfg(not(feature = "tls"))]
+fn validate_url(url: &str) -> Result<(), String> {
+    if url.starts_with("https://") {
+        return Err(
+            "HTTPS URLs require the `tls` feature. Use HTTP or rebuild with --features tls"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "tls")]
+fn validate_url(_url: &str) -> Result<(), String> {
+    Ok(())
 }
 
 /// Perform outgoing WHIP signaling.
@@ -47,6 +73,8 @@ pub async fn whip_out_publish(
     ice_lite: bool,
     relay_id: ResourceId,
 ) -> Result<(PeerConnectionHandle, Option<String>), String> {
+    validate_url(&config.endpoint_url)?;
+
     // 1. Create PeerConnection with WhipOut callbacks (no-op on incoming RTP)
     let callbacks: Arc<dyn WebRtcCallbacks> = Arc::new(WhipOutWebRtcCallbacks { relay_id });
     let pc_handle = create_pc(ice_lite, callbacks).await?;
@@ -73,7 +101,7 @@ pub async fn whip_out_publish(
         .body(Full::new(Bytes::from(offer_sdp)))
         .map_err(|e| format!("Failed to build WHIP-out request: {e}"))?;
 
-    let client = https_client();
+    let client = build_client();
     let response = client
         .request(req)
         .await
@@ -123,6 +151,8 @@ pub async fn whip_out_publish(
 
 /// Delete a WHIP-out resource on the remote server.
 pub async fn whip_out_delete(resource_url: &str, bearer_token: Option<&str>) -> Result<(), String> {
+    validate_url(resource_url)?;
+
     let uri: hyper::Uri = resource_url
         .parse()
         .map_err(|e| format!("Invalid resource URL: {e}"))?;
@@ -139,7 +169,7 @@ pub async fn whip_out_delete(resource_url: &str, bearer_token: Option<&str>) -> 
         .body(Full::new(Bytes::new()))
         .map_err(|e| format!("Failed to build DELETE request: {e}"))?;
 
-    let client = https_client();
+    let client = build_client();
     let response = client
         .request(req)
         .await

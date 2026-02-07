@@ -19,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - run: cargo check --workspace
 
   test:
@@ -27,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - run: cargo test --workspace
 
   clippy:
@@ -37,6 +39,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - run: cargo clippy --workspace -- -D warnings
 
   fmt:

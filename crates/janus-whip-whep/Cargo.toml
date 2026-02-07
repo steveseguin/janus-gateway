@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "WHIP ingest and WHEP egress for Janus Gateway"
 
+[features]
+default = []
+tls = ["hyper-rustls"]
+
 [dependencies]
 janus-core.workspace = true
 janus-plugin-api.workspace = true
@@ -16,12 +20,13 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 str0m.workspace = true
-getrandom = "0.2"
-tower.workspace = true
+getrandom.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-hyper-rustls.workspace = true
 http-body-util.workspace = true
+
+hyper-rustls = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
+tower.workspace = true

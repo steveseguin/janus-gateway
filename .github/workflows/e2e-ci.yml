@@ -41,6 +41,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
+      - name: Install OpenSSL development libraries
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
       - name: Build janus-rs server
         run: cargo build --release -p janus-server
 

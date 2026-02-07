@@ -32,7 +32,7 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 
 # WebRTC
-str0m = "0.11"
+str0m = { version = "0.11", default-features = false, features = ["openssl", "sha1"] }
 
 # Web / API
 axum = { version = "0.7", features = ["ws"] }
@@ -60,11 +60,10 @@ dashmap = "6"
 libloading = "0.8"
 
 # Crypto
-rustls = "0.23"
+getrandom = "0.2"
 
 # Error handling
 thiserror = "2"
-anyhow = "1"
 
 # Testing
 proptest = "1"
