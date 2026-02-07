@@ -65,15 +65,14 @@ async function sendMessageAndGetEvent(
 
   if (json.janus === "event") return json;
 
-  // Got "ack" — poll for the async event
-  for (let i = 0; i < 20; i++) {
-    const pollResp = await request.get(`/janus/${sessionId}?maxev=5`);
-    const pollJson = await pollResp.json();
-    const events = Array.isArray(pollJson) ? pollJson : [pollJson];
-    for (const ev of events) {
-      if (ev.janus === "event") return ev;
-    }
-    await new Promise((r) => setTimeout(r, 100));
+  // Got "ack" — poll for the async event via long-poll
+  for (let i = 0; i < 10; i++) {
+    const pollResp = await request.get(`/janus/${sessionId}/longpoll`);
+    const text = await pollResp.text();
+    if (!text) continue;
+    const pollJson = JSON.parse(text);
+    if (pollJson.janus === "event") return pollJson;
+    if (pollJson.janus === "keepalive") continue;
   }
   throw new Error("Timed out waiting for event after ack");
 }
