@@ -192,16 +192,33 @@ impl JanusServer {
     }
 
     fn handle_info(&self, transaction: &str) -> serde_json::Value {
-        let plugin_list: Vec<String> = self.plugins.iter().map(|e| e.key().clone()).collect();
+        // Build plugins object matching C Janus format: { "package": { metadata } }
+        let mut plugins_obj = serde_json::Map::new();
+        for entry in self.plugins.iter() {
+            let plugin = entry.value();
+            plugins_obj.insert(
+                entry.key().clone(),
+                json!({
+                    "name": plugin.name(),
+                    "version": plugin.version(),
+                    "version_string": plugin.version_string(),
+                    "description": plugin.description(),
+                    "author": plugin.author(),
+                }),
+            );
+        }
+
         json!({
             "janus": "server_info",
             "transaction": transaction,
-            "server_name": self.config.general.server_name,
+            "name": "Janus Gateway (Rust)",
+            "server-name": self.config.general.server_name,
+            "version": 1,
             "version_string": env!("CARGO_PKG_VERSION"),
             "author": "Steve Seguin (Rust rewrite)",
             "data_channels": true,
-            "session_timeout": self.config.general.session_timeout,
-            "plugins": plugin_list,
+            "session-timeout": self.config.general.session_timeout,
+            "plugins": plugins_obj,
         })
     }
 
@@ -304,7 +321,7 @@ impl JanusServer {
                         "janus": "error",
                         "transaction": transaction,
                         "error": {
-                            "code": 490,
+                            "code": 464,
                             "reason": format!("Plugin '{}' failed to create session: {}", plugin, e)
                         }
                     });
@@ -484,16 +501,9 @@ impl JanusServer {
                     }
                 }
 
-                // Push the event to the client via transport
-                self.send_to_client(session_id, &event);
-
-                // Return ack (the event is also pushed asynchronously)
-                json!({
-                    "janus": "ack",
-                    "transaction": txn,
-                    "session_id": session_id.0,
-                    "hint": "Event pushed"
-                })
+                // Return the event inline (C Janus returns synchronous
+                // plugin results directly in the HTTP response body).
+                event
             }
             Ok(PluginResult::OkWait { hint }) => {
                 // Plugin will call push_event later
@@ -509,7 +519,7 @@ impl JanusServer {
                     "janus": "error",
                     "transaction": txn,
                     "error": {
-                        "code": 490,
+                        "code": 472,
                         "reason": e.to_string()
                     }
                 })
@@ -525,7 +535,28 @@ impl JanusServer {
         handle_id: HandleId,
         message: &serde_json::Value,
     ) -> serde_json::Value {
-        self.sessions.touch_session(session_id);
+        if !self.sessions.touch_session(session_id) {
+            return json!({
+                "janus": "error",
+                "transaction": transaction,
+                "error": {
+                    "code": 458,
+                    "reason": format!("No such session {session_id}")
+                }
+            });
+        }
+
+        // Validate the handle exists
+        if self.sessions.get_handle(session_id, handle_id).is_err() {
+            return json!({
+                "janus": "error",
+                "transaction": transaction,
+                "error": {
+                    "code": 458,
+                    "reason": format!("No such handle {handle_id} in session {session_id}")
+                }
+            });
+        }
 
         let key = (session_id, handle_id);
         if let Some(pc) = self.peer_connections.get(&key) {
@@ -869,6 +900,12 @@ mod tests {
         Arc::new(JanusServer::new(config))
     }
 
+    async fn test_server_with_plugin() -> Arc<JanusServer> {
+        let server = test_server();
+        register_echotest_plugin(&server).await;
+        server
+    }
+
     async fn register_echotest_plugin(server: &Arc<JanusServer>) {
         let mut echotest = EchoTestPlugin::default();
         let callbacks = server.plugin_callbacks();
@@ -895,8 +932,11 @@ mod tests {
             .process_request(&req, json!({"janus": "info", "transaction": "txn2"}))
             .await;
         assert_eq!(resp["janus"], "server_info");
-        assert!(resp["server_name"].is_string());
-        assert_eq!(resp["session_timeout"], 60);
+        assert!(resp["server-name"].is_string());
+        assert!(resp["name"].is_string());
+        assert_eq!(resp["session-timeout"], 60);
+        assert!(resp["version"].is_number());
+        assert!(resp["plugins"].is_object());
     }
 
     #[tokio::test]
@@ -1220,7 +1260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trickle_returns_ack() {
+    async fn trickle_returns_error_for_bad_session() {
         let server = test_server();
         let req = TransportRequest::new("test-client");
         let resp = server
@@ -1231,6 +1271,48 @@ mod tests {
                     "transaction": "t1",
                     "session_id": 1,
                     "handle_id": 2,
+                    "candidate": {"sdpMid": "audio", "sdpMLineIndex": 0, "candidate": "candidate:..."}
+                }),
+            )
+            .await;
+        assert_eq!(resp["janus"], "error");
+        assert_eq!(resp["error"]["code"], 458);
+    }
+
+    #[tokio::test]
+    async fn trickle_returns_ack_for_valid_handle() {
+        let server = test_server_with_plugin().await;
+        let req = TransportRequest::new("test-client");
+
+        // Create session
+        let resp = server
+            .process_request(&req, json!({"janus": "create", "transaction": "t1"}))
+            .await;
+        let session_id = resp["data"]["id"].as_u64().unwrap();
+
+        // Attach to plugin
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "attach",
+                    "transaction": "t2",
+                    "session_id": session_id,
+                    "plugin": "janus.plugin.echotest"
+                }),
+            )
+            .await;
+        let handle_id = resp["data"]["id"].as_u64().unwrap();
+
+        // Trickle
+        let resp = server
+            .process_request(
+                &req,
+                json!({
+                    "janus": "trickle",
+                    "transaction": "t3",
+                    "session_id": session_id,
+                    "handle_id": handle_id,
                     "candidate": {"sdpMid": "audio", "sdpMLineIndex": 0, "candidate": "candidate:..."}
                 }),
             )
@@ -1358,7 +1440,9 @@ mod tests {
                 }),
             )
             .await;
-        // Should get ack (event pushed asynchronously)
-        assert_eq!(resp["janus"], "ack");
+        // Synchronous plugin result returned inline (C Janus compat)
+        assert_eq!(resp["janus"], "event");
+        assert!(resp["plugindata"]["data"]["echotest"].is_string());
+        assert_eq!(resp["sender"], handle_id);
     }
 }

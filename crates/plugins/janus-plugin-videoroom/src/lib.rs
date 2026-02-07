@@ -225,7 +225,7 @@ impl VideoRoomPlugin {
         Ok(json!({
             "videoroom": "attached",
             "room": room_id,
-            "id": user_id,
+            "id": feed,
             "display": room.publishers.get(&feed).map(|p| p.display.clone()),
         }))
     }
@@ -490,6 +490,7 @@ impl janus_plugin_api::JanusPlugin for VideoRoomPlugin {
                     body: json!({
                         "videoroom": "created",
                         "room": room.id,
+                        "permanent": false,
                     }),
                     jsep: None,
                 }))

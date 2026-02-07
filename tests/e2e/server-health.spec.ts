@@ -6,7 +6,12 @@ test.describe("Server Health", () => {
     expect(response.ok()).toBeTruthy();
     const json = await response.json();
     expect(json.janus).toBe("server_info");
-    expect(json.server_name).toBeTruthy();
+    expect(json["server-name"]).toBeTruthy();
+    expect(json.name).toBeTruthy();
+    expect(json["session-timeout"]).toBeGreaterThan(0);
+    expect(json.version).toBeGreaterThanOrEqual(1);
+    expect(typeof json.plugins).toBe("object");
+    expect(Array.isArray(json.plugins)).toBe(false);
   });
 
   test("POST /janus with ping returns pong", async ({ request }) => {

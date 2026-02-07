@@ -110,7 +110,9 @@ async fn ws_server_info() {
     .await;
     assert_eq!(resp["janus"], "server_info");
     assert!(resp["name"].is_string());
-    assert_eq!(resp["session_timeout"], 60);
+    assert!(resp["server-name"].is_string());
+    assert_eq!(resp["session-timeout"], 60);
+    assert!(resp["plugins"].is_object());
 }
 
 #[tokio::test]
@@ -189,7 +191,7 @@ async fn ws_full_session_lifecycle() {
     .await;
     assert_eq!(resp["janus"], "ack");
 
-    // Send message
+    // Send message — synchronous plugin results return inline
     let resp = ws_roundtrip(
         &mut tx,
         &mut rx,
@@ -202,7 +204,8 @@ async fn ws_full_session_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(resp["janus"], "ack");
+    assert_eq!(resp["janus"], "event");
+    assert!(resp["plugindata"]["data"]["echotest"].is_string());
 
     // Detach
     let resp = ws_roundtrip(

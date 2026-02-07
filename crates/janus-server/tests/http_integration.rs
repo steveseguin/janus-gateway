@@ -98,6 +98,9 @@ async fn full_session_lifecycle() {
     };
     assert_eq!(info["janus"], "server_info");
     assert!(info["name"].is_string());
+    assert!(info["server-name"].is_string());
+    assert_eq!(info["session-timeout"], 60);
+    assert!(info["plugins"].is_object());
 
     // 2. Create session
     let resp = post_janus(&app, json!({"janus": "create", "transaction": "t1"})).await;
@@ -139,7 +142,9 @@ async fn full_session_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(resp["janus"], "ack");
+    // Synchronous plugin results are returned inline (C Janus compat)
+    assert_eq!(resp["janus"], "event");
+    assert!(resp["plugindata"]["data"]["echotest"].is_string());
 
     // 6. Detach handle
     let resp = post_session(
