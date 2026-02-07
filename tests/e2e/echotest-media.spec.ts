@@ -42,6 +42,42 @@ async function destroySession(request: any, sessionId: number) {
   });
 }
 
+/**
+ * Helper: send a message and get the event response.
+ * If the server returns "ack" (async processing), polls for the event.
+ */
+async function sendMessageAndGetEvent(
+  request: any,
+  sessionId: number,
+  handleId: number,
+  body: any,
+  jsep?: any,
+): Promise<any> {
+  const data: any = {
+    janus: "message",
+    transaction: `t-${Date.now()}`,
+    body,
+  };
+  if (jsep) data.jsep = jsep;
+
+  const resp = await request.post(`/janus/${sessionId}/${handleId}`, { data });
+  const json = await resp.json();
+
+  if (json.janus === "event") return json;
+
+  // Got "ack" — poll for the async event
+  for (let i = 0; i < 20; i++) {
+    const pollResp = await request.get(`/janus/${sessionId}?maxev=5`);
+    const pollJson = await pollResp.json();
+    const events = Array.isArray(pollJson) ? pollJson : [pollJson];
+    for (const ev of events) {
+      if (ev.janus === "event") return ev;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("Timed out waiting for event after ack");
+}
+
 test.describe("EchoTest Media Verification", () => {
   test("echotest message with SDP offer gets SDP answer", async ({
     request,
@@ -68,15 +104,13 @@ test.describe("EchoTest Media Verification", () => {
       "",
     ].join("\r\n");
 
-    const msgResp = await request.post(`/janus/${sessionId}/${handleId}`, {
-      data: {
-        janus: "message",
-        transaction: "t-msg",
-        body: { audio: true, video: true },
-        jsep: { type: "offer", sdp: sdpOffer },
-      },
-    });
-    const msgJson = await msgResp.json();
+    const msgJson = await sendMessageAndGetEvent(
+      request,
+      sessionId,
+      handleId,
+      { audio: true, video: true },
+      { type: "offer", sdp: sdpOffer },
+    );
 
     // Should get an event with JSEP answer
     expect(msgJson.janus).toBe("event");
@@ -113,15 +147,13 @@ test.describe("EchoTest Media Verification", () => {
     ].join("\r\n");
 
     // Configure audio only
-    const msgResp = await request.post(`/janus/${sessionId}/${handleId}`, {
-      data: {
-        janus: "message",
-        transaction: "t-msg",
-        body: { audio: true, video: false },
-        jsep: { type: "offer", sdp: sdpOffer },
-      },
-    });
-    const msgJson = await msgResp.json();
+    const msgJson = await sendMessageAndGetEvent(
+      request,
+      sessionId,
+      handleId,
+      { audio: true, video: false },
+      { type: "offer", sdp: sdpOffer },
+    );
 
     expect(msgJson.janus).toBe("event");
     expect(msgJson.jsep).toBeTruthy();

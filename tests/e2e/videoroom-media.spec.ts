@@ -55,6 +55,37 @@ async function destroySession(request: any, sessionId: number) {
   });
 }
 
+/**
+ * Helper: send a message and get the event response.
+ * If the server returns "ack" (async processing), polls for the event.
+ */
+async function sendMessageAndGetEvent(
+  request: any,
+  sessionId: number,
+  handleId: number,
+  body: any,
+  jsep?: any,
+): Promise<any> {
+  const data: any = { janus: "message", transaction: `t-${Date.now()}`, body };
+  if (jsep) data.jsep = jsep;
+  const resp = await request.post(`/janus/${sessionId}/${handleId}`, { data });
+  const json = await resp.json();
+
+  if (json.janus === "event" || json.janus === "error") return json;
+
+  // Got "ack" — poll for the async event
+  for (let i = 0; i < 20; i++) {
+    const pollResp = await request.get(`/janus/${sessionId}?maxev=5`);
+    const pollJson = await pollResp.json();
+    const events = Array.isArray(pollJson) ? pollJson : [pollJson];
+    for (const ev of events) {
+      if (ev.janus === "event" || ev.janus === "error") return ev;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("Timed out waiting for event after ack");
+}
+
 /** Helper: poll for events on a session. */
 async function pollEvents(request: any, sessionId: number): Promise<any[]> {
   const resp = await request.get(`/janus/${sessionId}?maxev=10`);
@@ -157,7 +188,7 @@ test.describe("VideoRoom Multi-Party Signaling", () => {
       "",
     ].join("\r\n");
 
-    const configResp = await sendMessage(
+    const configResp = await sendMessageAndGetEvent(
       request,
       sessionId,
       handleId,
