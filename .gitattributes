@@ -1,1 +1,11 @@
+# Force LF line endings for all text files
+* text=auto eol=lf
+
+# Binary assets
 *.mulaw binary
+*.mjr binary
+*.alaw binary
+*.opus binary
+
+# Fuzzer corpora are binary blobs
+c-legacy/fuzzers/corpora/** binary

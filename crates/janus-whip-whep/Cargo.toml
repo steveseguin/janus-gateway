@@ -1,0 +1,25 @@
+[package]
+name = "janus-whip-whep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WHIP ingest and WHEP egress for Janus Gateway"
+
+[dependencies]
+janus-core.workspace = true
+janus-plugin-api.workspace = true
+
+axum.workspace = true
+tokio.workspace = true
+dashmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+str0m.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  janus:
+    build: .
+    ports:
+      - "8088:8088"     # HTTP API + static files
+      - "8188:8188"     # WebSocket API
+      - "5004:5004/udp" # Streaming audio RTP
+      - "5006:5006/udp" # Streaming video RTP
+      - "20000-20100:20000-20100/udp" # WebRTC UDP
+    environment:
+      - RUST_LOG=info
+      - JANUS_CONFIG=/etc/janus/janus.toml
+      - JANUS_STATIC_DIR=/opt/janus/html
+    volumes:
+      - ./config:/etc/janus:ro
+    restart: unless-stopped
+
+  # Optional: ffmpeg RTP source for the streaming plugin.
+  # Generates a test pattern with a 440 Hz tone.
+  # Uncomment to enable.
+  #
+  # ffmpeg-source:
+  #   image: linuxserver/ffmpeg:latest
+  #   depends_on:
+  #     - janus
+  #   entrypoint: >
+  #     ffmpeg -re
+  #     -f lavfi -i "testsrc2=size=640x480:rate=30"
+  #     -f lavfi -i "sine=frequency=440:sample_rate=48000"
+  #     -c:v libvpx -b:v 500k -deadline realtime
+  #     -c:a libopus -b:a 48k
+  #     -f rtp rtp://janus:5006
+  #     -f rtp rtp://janus:5004
+  #   restart: unless-stopped

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Janus (Rust) — VideoRoom Bouncing Ball</title>
+    <style>
+        body { font-family: sans-serif; background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }
+        h1 { color: #e94560; margin-bottom: 5px; }
+        .subtitle { color: #888; margin-bottom: 20px; }
+        a { color: #4ecca3; }
+        #container { display: flex; flex-wrap: wrap; gap: 16px; }
+        .video-box { background: #16213e; border-radius: 8px; padding: 12px; }
+        .video-box h3 { margin: 0 0 8px; font-size: 14px; color: #0f3460; }
+        canvas, video { border-radius: 4px; display: block; background: #000; }
+        video { width: 320px; height: 240px; }
+        #status { margin-top: 16px; padding: 8px 12px; background: #16213e; border-radius: 4px; font-size: 13px; }
+        .ok { color: #4ecca3; }
+        .err { color: #e94560; }
+    </style>
+</head>
+<body>
+    <h1>VideoRoom — Bouncing Ball Demo</h1>
+    <p class="subtitle">Rust Janus Server &bull; Canvas + sinewave published to room 1234 &bull; <a href="index.html">All demos</a></p>
+
+    <div id="container">
+        <div class="video-box">
+            <h3>Local (canvas capture)</h3>
+            <canvas id="ball-canvas" width="320" height="240"></canvas>
+        </div>
+        <div id="remote-feeds"></div>
+    </div>
+
+    <div id="status">Connecting...</div>
+
+    <script src="/demos/janus.js"></script>
+    <script src="settings.js"></script>
+    <script src="bouncingball.js"></script>
+</body>
+</html>

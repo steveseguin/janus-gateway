@@ -1,0 +1,22 @@
+[package]
+name = "janus-plugin-echotest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "EchoTest plugin for Janus Gateway — echoes RTP/RTCP back to the sender"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+janus-plugin-api.workspace = true
+
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+dashmap.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

@@ -1,3 +1,7 @@
+# Rust
+/target
+
+# C legacy build artifacts
 cmdline.c
 cmdline.h
 version.c
